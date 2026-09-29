@@ -1543,7 +1543,7 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
     }
 
     private fun refreshUi() {
-        nameView.text = state.name
+        // Legacy nameView is not part of the current editor hierarchy.
 
         activeSwitch.setOnCheckedChangeListener(null)
         activeSwitch.isChecked = state.active
