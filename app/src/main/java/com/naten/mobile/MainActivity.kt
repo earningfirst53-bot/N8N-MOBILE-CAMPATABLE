@@ -264,6 +264,8 @@ class MainActivity : Activity() {
         "Stop / Error" -> "Stop / error"
         "Respond to Webhook" -> "Webhook response"
         "Execute Sub-workflow" -> "Run another workflow"
+        "YouTube" -> "YouTube"
+        "Unsupported / Imported" -> "Unsupported imported node"
         else -> type
     }
 
@@ -427,10 +429,18 @@ class MainActivity : Activity() {
 
         when (node.type) {
             "Schedule Trigger" -> {
+                spinners["mode"] = spinner("mode", "Schedule mode", listOf("interval", "daily", "weekly", "once"))
                 fields["interval"] = textField("interval", "Interval")
                 fields["interval"]?.inputType = InputType.TYPE_CLASS_NUMBER
-                spinners["unit"] = spinner("unit", "Unit", listOf("seconds", "minutes", "hours", "days"))
-                label("Background schedules use Android alarms and may be deferred slightly by the OS.")
+                spinners["unit"] = spinner("unit", "Interval unit", listOf("seconds", "minutes", "hours", "days"))
+                fields["hour"] = textField("hour", "Daily/weekly hour (0–23)")
+                fields["hour"]?.inputType = InputType.TYPE_CLASS_NUMBER
+                fields["minute"] = textField("minute", "Daily/weekly minute (0–59)")
+                fields["minute"]?.inputType = InputType.TYPE_CLASS_NUMBER
+                fields["days"] = textField("days", "Weekly days (MON,TUE,WED...)")
+                fields["timezone"] = textField("timezone", "Timezone, e.g. Asia/Kolkata")
+                fields["runAtEpochMs"] = textField("runAtEpochMs", "One-time run timestamp (milliseconds)")
+                label("Android alarms can be deferred by the OS. NATEN uses exact alarms when the required Android access is available.")
             }
 
             "Webhook Trigger", "Chat Trigger" -> {
@@ -444,9 +454,27 @@ class MainActivity : Activity() {
                 fields["url"] = textField("url", "URL")
                 fields["headers"] = textField("headers", "Headers (one per line: Key: Value)", true)
                 fields["body"] = textField("body", "Body", true)
+                fields["queryParams"] = textField("queryParams", "Query parameters (one per line: key=value)", true)
                 fields["credentialName"] = textField("credentialName", "Saved credential name (optional)")
                 fields["credentialHeader"] = textField("credentialHeader", "Credential header")
                 fields["credentialPrefix"] = textField("credentialPrefix", "Credential prefix")
+            }
+            "YouTube" -> {
+                spinners["operation"] = spinner(
+                    "operation",
+                    "Operation",
+                    listOf("Search", "Get Channel", "Search Channel Videos", "Get Video", "My Channel")
+                )
+                fields["query"] = textField("query", "Search query")
+                fields["channelId"] = textField("channelId", "Channel ID")
+                fields["videoId"] = textField("videoId", "Video ID")
+                fields["maxResults"] = textField("maxResults", "Maximum results")
+                fields["order"] = textField("order", "Order (relevance/date/viewCount)")
+                fields["credentialName"] = textField("credentialName", "YouTube API key credential")
+                fields["accessTokenCredential"] = textField("accessTokenCredential", "OAuth access-token credential (for private account operations)")
+                fields["apiKey"] = textField("apiKey", "API key (leave blank when using credential)")
+                fields["accessToken"] = textField("accessToken", "OAuth access token (leave blank when using credential)")
+                label("API keys access public YouTube data. Private account operations require an OAuth access token with the required YouTube scope.")
             }
 
             "GraphQL" -> {
@@ -503,7 +531,7 @@ class MainActivity : Activity() {
                 fields["field"] = textField("field", "Field")
                 spinners["operation"] = spinner("operation", "Operation", listOf("count", "sum", "average"))
             }
-            "JSON Parse", "JSON Stringify", "Date & Time", "Markdown", "HTML", "XML", "Crypto" ->
+            "JSON Parse", "JSON Stringify", "Markdown", "HTML", "XML", "Crypto" ->
                 fields["field"] = textField("field", "Field")
             "Date & Time" -> fields["format"] = textField("format", "Format")
             "Code" -> {
@@ -532,14 +560,20 @@ class MainActivity : Activity() {
             "Open URL" -> fields["url"] = textField("url", "URL")
             "Share Text" -> fields["text"] = textField("text", "Text", true)
             "AI Text", "AI Agent" -> {
-                spinners["provider"] = spinner("provider", "Provider", listOf("OpenAI-compatible", "Gemini"))
+                spinners["provider"] = spinner(
+                    "provider",
+                    "Provider",
+                    listOf("OpenAI", "Gemini", "Anthropic", "OpenRouter", "Groq", "DeepSeek", "Mistral")
+                )
                 fields["endpoint"] = textField("endpoint", "Endpoint")
                 fields["credentialName"] = textField("credentialName", "Saved credential name (optional)")
                 fields["apiKey"] = textField("apiKey", "API key (leave blank when using saved credential)")
                 fields["apiKey"]?.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 fields["model"] = textField("model", "Model")
+                fields["systemPrompt"] = textField("systemPrompt", "System prompt", true)
                 fields["prompt"] = textField("prompt", "Prompt", true)
                 fields["temperature"] = textField("temperature", "Temperature")
+                spinners["responseFormat"] = spinner("responseFormat", "Response format", listOf("text", "json"))
             }
             "Log", "Stop / Error" -> fields["message"] = textField("message", "Message", true)
             "Respond to Webhook" -> {
@@ -1104,7 +1138,7 @@ class MainActivity : Activity() {
             ".code" in value -> "Code"
             "respondtowebhook" in value -> "Respond to Webhook"
             "executeworkflow" in value || "subworkflow" in value -> "Execute Sub-workflow"
-            else -> "Generic API"
+            else -> "Unsupported / Imported"
         }
     }
 
