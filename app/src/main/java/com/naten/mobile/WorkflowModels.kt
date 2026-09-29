@@ -28,34 +28,32 @@ data class WorkflowState(
 
 object WorkflowJson {
     fun toJson(state: WorkflowState): JSONObject {
-        val root = JSONObject()
-        root.put("format", "naten-v1")
-        root.put("name", state.name)
-        root.put("active", state.active)
-
-        val nodes = JSONArray()
-        state.nodes.forEach { n ->
-            nodes.put(JSONObject().apply {
-                put("id", n.id)
-                put("type", n.type)
-                put("title", n.title)
-                put("x", n.x)
-                put("y", n.y)
-                put("config", n.config)
+        return JSONObject().apply {
+            put("format", "naten-v1")
+            put("name", state.name)
+            put("active", state.active)
+            put("nodes", JSONArray().also { nodes ->
+                state.nodes.forEach { n ->
+                    nodes.put(JSONObject().apply {
+                        put("id", n.id)
+                        put("type", n.type)
+                        put("title", n.title)
+                        put("x", n.x)
+                        put("y", n.y)
+                        put("config", n.config)
+                    })
+                }
+            })
+            put("edges", JSONArray().also { edges ->
+                state.edges.forEach { e ->
+                    edges.put(JSONObject().apply {
+                        put("from", e.from)
+                        put("to", e.to)
+                        put("branch", e.branch)
+                    })
+                }
             })
         }
-        root.put("nodes", nodes)
-
-        val edges = JSONArray()
-        state.edges.forEach { e ->
-            edges.put(JSONObject().apply {
-                put("from", e.from)
-                put("to", e.to)
-                put("branch", e.branch)
-            })
-        }
-        root.put("edges", edges)
-        return root
     }
 
     fun fromJson(root: JSONObject): WorkflowState {
@@ -78,6 +76,7 @@ object WorkflowJson {
                 )
             )
         }
+
         val edges = root.optJSONArray("edges") ?: JSONArray()
         for (i in 0 until edges.length()) {
             val o = edges.getJSONObject(i)
@@ -114,25 +113,21 @@ object WorkflowJson {
     fun appendHistory(context: Context, entry: JSONObject) {
         val arr = history(context)
         arr.put(entry)
-        while (arr.length() > 50) {
-            val keep = JSONArray()
-            for (i in 1 until arr.length()) keep.put(arr.get(i))
-            while (keep.length() < arr.length() - 1) {
-                keep.put(JSONObject())
-            }
-            // rebuild simply below
-            break
-        }
+
         val limited = JSONArray()
         val start = maxOf(0, arr.length() - 50)
         for (i in start until arr.length()) limited.put(arr.get(i))
+
         context.getSharedPreferences("naten", Context.MODE_PRIVATE)
-            .edit().putString("history", limited.toString()).apply()
+            .edit()
+            .putString("history", limited.toString())
+            .apply()
     }
 }
 
 fun FlowNode.ensureDefaultConfig() {
     if (config.length() > 0) return
+
     when (type) {
         "Schedule Trigger" -> {
             config.put("interval", 60)
@@ -152,7 +147,7 @@ fun FlowNode.ensureDefaultConfig() {
         }
         "Switch" -> {
             config.put("field", "value")
-            config.put("cases", "one\ntwo\nthree")
+            config.put("cases", "one\\ntwo\\nthree")
         }
         "Wait" -> config.put("seconds", 2)
         "AI Text" -> {
@@ -162,6 +157,12 @@ fun FlowNode.ensureDefaultConfig() {
             config.put("model", "gpt-4o-mini")
             config.put("prompt", "Summarize this: {{$json}}")
             config.put("temperature", 0.4)
+        }
+        "Code" -> {
+            config.put("operation", "uppercase")
+            config.put("field", "text")
+            config.put("outputField", "text")
+            config.put("value", "Hello")
         }
         "Notification" -> {
             config.put("title", "NATEN")
