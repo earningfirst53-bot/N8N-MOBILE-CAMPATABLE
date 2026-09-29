@@ -299,7 +299,7 @@ class MainActivity : Activity() {
         val search = EditText(this).apply {
             hint = "Search nodes…"
             textSize = 14f
-            singleLine = true
+            setSingleLine(true)
             setPadding(dp(10), dp(8), dp(10), dp(8))
             background = rounded(Color.WHITE, 10f, Color.rgb(208, 213, 221), 1)
         }
@@ -1256,6 +1256,10 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
     private fun dpF(v: Int): Float =
         v * resources.displayMetrics.density
+
+    private fun dpF(v: Float): Float =
+        v * resources.displayMetrics.density
+
 
     inner class FrameLikeScroll(context: Context) : ViewGroup(context) {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
