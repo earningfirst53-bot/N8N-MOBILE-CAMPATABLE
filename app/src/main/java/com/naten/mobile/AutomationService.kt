@@ -32,7 +32,13 @@ class AutomationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startAsForeground("NATEN automation active", "Background automation is running")
+        try {
+            startAsForeground("NATEN automation active", "Background automation is running")
+        } catch (t: Throwable) {
+            android.util.Log.e("NATEN", "Unable to promote automation service to foreground", t)
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
 
         when (intent?.action) {
             ACTION_RUN -> {
