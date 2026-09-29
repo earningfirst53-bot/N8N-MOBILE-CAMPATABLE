@@ -28,7 +28,20 @@ interface ExecutionListener {
 class WorkflowEngine(private val context: Context) {
     private val executor = Executors.newCachedThreadPool()
 
-    fun run(state: WorkflowState, listener: ExecutionListener? = null, background: Boolean = false) {
+    fun run(
+        state: WorkflowState,
+        listener: ExecutionListener? = null,
+        background: Boolean = false
+    ) {
+        runWithInput(state, null, listener, background)
+    }
+
+    fun runWithInput(
+        state: WorkflowState,
+        input: JSONObject?,
+        listener: ExecutionListener? = null,
+        background: Boolean = false
+    ) {
         executor.execute {
             val started = System.currentTimeMillis()
             val runId = UUID.randomUUID().toString()
@@ -51,8 +64,9 @@ class WorkflowEngine(private val context: Context) {
                 val preferred = if (background) {
                     state.nodes.filter { it.type == "Schedule Trigger" }
                 } else {
-                    state.nodes.filter { it.type == "Manual Trigger" }
+                    state.nodes.filter { it.type == "Manual Trigger" || it.type == "Webhook Trigger" || it.type == "Chat Trigger" }
                 }
+
                 val starts = preferred.ifEmpty {
                     state.nodes.filter { it.type.endsWith("Trigger") }
                 }.ifEmpty {
@@ -63,7 +77,7 @@ class WorkflowEngine(private val context: Context) {
                 starts.forEach { queue.addLast(it.id) }
 
                 val visited = mutableSetOf<Int>()
-                var data = JSONObject().apply {
+                var data = input?.let { JSONObject(it.toString()) } ?: JSONObject().apply {
                     put("trigger", if (background) "schedule" else "manual")
                     put("timestamp", now())
                 }
@@ -116,8 +130,9 @@ class WorkflowEngine(private val context: Context) {
                 WorkflowJson.appendHistory(
                     context,
                     JSONObject().apply {
-                        put("id", runId)
+                        put("runId", runId)
                         put("workflow", state.name)
+                        put("workflowId", state.id)
                         put("started", started)
                         put("durationMs", System.currentTimeMillis() - started)
                         put("success", success)
