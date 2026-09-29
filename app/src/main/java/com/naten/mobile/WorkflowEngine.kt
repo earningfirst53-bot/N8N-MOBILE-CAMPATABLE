@@ -71,7 +71,7 @@ class WorkflowEngine(private val context: Context) {
                     status("Running: " + node.title)
                     report("▶ " + node.type + ": " + node.title)
 
-                    val result = executeNode(node, data, vars, background, report)
+                    val result = executeNode(node, data, vars, background, ::report)
                     data = result.data
 
                     if (result.stop) {
@@ -165,7 +165,7 @@ class WorkflowEngine(private val context: Context) {
                 }
 
                 parseHeaders(render(c.optString("headers"), input, vars)).forEach { pair ->
-                    conn.setRequestProperty(pair.first, pair.second)
+                    conn.setRequestProperty(pair.key, pair.value)
                 }
 
                 if (method != "GET" && method != "HEAD") {
@@ -206,7 +206,7 @@ class WorkflowEngine(private val context: Context) {
             "Edit Fields" -> {
                 val out = JSONObject(input.toString())
                 parseFields(render(c.optString("fields"), input, vars)).forEach { pair ->
-                    out.put(pair.first, pair.second)
+                    out.put(pair.key, pair.value)
                 }
                 NodeResult(out)
             }
@@ -420,8 +420,458 @@ class WorkflowEngine(private val context: Context) {
     }
 
     private fun lookup(root: JSONObject, path: String): String? {
+        val dollar = '    private fun render(input: String, data: JSONObject, vars: Map<String, String>): String {
+        var out = input
+        val dollar = '    private fun callOpenAiCompatible(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put("messages", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("content", prompt)
+            }))
+            put("temperature", temperature)
+        }
+
+        val json = postJson(endpoint, key, body)
+        return json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
+                .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callGemini(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        val finalEndpoint = endpoint.ifBlank {
+            "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
+        }
+        val url = if (finalEndpoint.contains("?")) {
+            finalEndpoint + "&key=" + key
+        } else {
+            finalEndpoint + "?key=" + key
+        }
+
+        val body = JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            }))
+            put("generationConfig", JSONObject().put("temperature", temperature))
+        }
+
+        val json = postJson(url, "", body)
+        return json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.toString()
+    }
+
+    private fun postJson(endpoint: String, key: String, body: JSONObject): JSONObject {
+        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) setRequestProperty("Authorization", "Bearer " + key)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val text = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
+        } ?: ""
+
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            throw IllegalStateException("AI request failed (" + code + "): " + text.take(180))
+        }
+
+        return runCatching { JSONObject(text) }.getOrElse {
+            JSONObject().put("text", text)
+        }
+    }
+
+    private fun postNotification(title: String, message: String) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "naten_runs"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "NATEN workflow runs",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(context, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+
+        val notification = builder
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(message.take(140))
+            .setAutoCancel(true)
+            .build()
+
+        nm.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+    }
+
+    private fun now(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+}
+
         val clean = path
-            .removePrefix("{{\$json.")
+            .removePrefix("{{" + dollar + "json.")
+            .removeSuffix("}}")
+            .removePrefix("json.")
+
+        if (clean.isBlank() || clean == "json") return root.toString()
+
+        var cur: Any = root
+        for (key in clean.split('.').filter { it.isNotBlank() }) {
+            cur = when (cur) {
+                is JSONObject -> cur.opt(key) ?: return null
+                is JSONArray -> cur.opt(key.toIntOrNull() ?: return null)
+                else -> return null
+            }
+        }
+
+        return when (cur) {
+            JSONObject.NULL -> null
+            else -> cur.toString()
+        }
+    }
+
+    private fun render(input: String, data: JSONObject, vars: Map<String, String>): String {
+        var out = input
+
+        out = out.replace("{{\$now}}", now())
+        out = out.replace("{{\$json}}", data.toString())
+
+        Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
+            .findAll(out).toList().asReversed().forEach { match ->
+                val key = match.groupValues.getOrElse(1) { "" }
+                val replacement = if (key.isBlank()) data.toString()
+                else lookup(data, key) ?: ""
+                out = out.replace(match.value, replacement)
+            }
+
+        Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
+            .findAll(out).toList().asReversed().forEach { match ->
+                out = out.replace(match.value, vars[match.groupValues[1]] ?: "")
+            }
+
+        return out
+    }
+
+    private fun callOpenAiCompatible(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put("messages", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("content", prompt)
+            }))
+            put("temperature", temperature)
+        }
+
+        val json = postJson(endpoint, key, body)
+        return json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
+                .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callGemini(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        val finalEndpoint = endpoint.ifBlank {
+            "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
+        }
+        val url = if (finalEndpoint.contains("?")) {
+            finalEndpoint + "&key=" + key
+        } else {
+            finalEndpoint + "?key=" + key
+        }
+
+        val body = JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            }))
+            put("generationConfig", JSONObject().put("temperature", temperature))
+        }
+
+        val json = postJson(url, "", body)
+        return json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.toString()
+    }
+
+    private fun postJson(endpoint: String, key: String, body: JSONObject): JSONObject {
+        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) setRequestProperty("Authorization", "Bearer " + key)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val text = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
+        } ?: ""
+
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            throw IllegalStateException("AI request failed (" + code + "): " + text.take(180))
+        }
+
+        return runCatching { JSONObject(text) }.getOrElse {
+            JSONObject().put("text", text)
+        }
+    }
+
+    private fun postNotification(title: String, message: String) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "naten_runs"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "NATEN workflow runs",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(context, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+
+        val notification = builder
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(message.take(140))
+            .setAutoCancel(true)
+            .build()
+
+        nm.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+    }
+
+    private fun now(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+}
+
+
+        out = out.replace("{{" + dollar + "now}}", now())
+        out = out.replace("{{" + dollar + "json}}", data.toString())
+
+        val jsonPattern = Regex("\\{\\{" + Regex.escape(dollar.toString()) + "json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
+        jsonPattern.findAll(out).toList().asReversed().forEach { match ->
+            val key = match.groupValues.getOrElse(1) { "" }
+            val replacement = if (key.isBlank()) data.toString()
+            else lookup(data, key) ?: ""
+            out = out.replace(match.value, replacement)
+        }
+
+        val varsPattern = Regex("\\{\\{" + Regex.escape(dollar.toString()) + "vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
+        varsPattern.findAll(out).toList().asReversed().forEach { match ->
+            out = out.replace(match.value, vars[match.groupValues[1]] ?: "")
+        }
+
+        return out
+    }
+
+    private fun callOpenAiCompatible(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put("messages", JSONArray().put(JSONObject().apply {
+                put("role", "user")
+                put("content", prompt)
+            }))
+            put("temperature", temperature)
+        }
+
+        val json = postJson(endpoint, key, body)
+        return json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
+                .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callGemini(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        val finalEndpoint = endpoint.ifBlank {
+            "https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent"
+        }
+        val url = if (finalEndpoint.contains("?")) {
+            finalEndpoint + "&key=" + key
+        } else {
+            finalEndpoint + "?key=" + key
+        }
+
+        val body = JSONObject().apply {
+            put("contents", JSONArray().put(JSONObject().apply {
+                put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+            }))
+            put("generationConfig", JSONObject().put("temperature", temperature))
+        }
+
+        val json = postJson(url, "", body)
+        return json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.toString()
+    }
+
+    private fun postJson(endpoint: String, key: String, body: JSONObject): JSONObject {
+        val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) setRequestProperty("Authorization", "Bearer " + key)
+        }
+
+        conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val text = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader -> reader.readText() }
+        } ?: ""
+
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            throw IllegalStateException("AI request failed (" + code + "): " + text.take(180))
+        }
+
+        return runCatching { JSONObject(text) }.getOrElse {
+            JSONObject().put("text", text)
+        }
+    }
+
+    private fun postNotification(title: String, message: String) {
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "naten_runs"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "NATEN workflow runs",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(context, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+
+        val notification = builder
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(message.take(140))
+            .setAutoCancel(true)
+            .build()
+
+        nm.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
+    }
+
+    private fun now(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+}
+
+        val clean = path
+            .removePrefix("{{" + dollar + "json.")
             .removeSuffix("}}")
             .removePrefix("json.")
 
