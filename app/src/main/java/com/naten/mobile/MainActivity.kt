@@ -401,7 +401,7 @@ class MainActivity : Activity() {
                         multi = true
                     )
                 )
-                addLabel("Use {{$json.field}}, {{$vars.name}} and {{$now}} in values.")
+                addLabel("Use {{\$json.field}}, {{\$vars.name}} and {{\$now}} in values.")
             }
 
             "IF" -> {
@@ -881,9 +881,9 @@ Wait, files, variables, notifications, sharing and URL actions are executed by A
 The Active switch schedules Schedule Trigger workflows using Android alarms.
 
 Expressions supported:
-{{$json.field}}
-{{$vars.name}}
-{{$now}}
+{{\$json.field}}
+{{\$vars.name}}
+{{\$now}}
 
 Files are stored in this app's private NATEN storage area.
 """.trimIndent()
