@@ -53,7 +53,17 @@ fun FlowNode.ensureDefaultConfig() {
             if (!config.has("timezone")) config.put("timezone", java.util.TimeZone.getDefault().id)
             if (!config.has("runAtEpochMs")) config.put("runAtEpochMs", 0L)
         }
-        "HTTP Request", "Generic API" -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty().ifBlank { "https://example.com" }); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", ""); if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ") }
+        "HTTP Request", "Generic API" -> {
+            if (!config.has("method")) config.put("method", "GET")
+            if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty().ifBlank { "https://example.com" })
+            if (!config.has("headers")) config.put("headers", "")
+            if (!config.has("queryParams")) config.put("queryParams", "")
+            if (!config.has("body")) config.put("body", "")
+            if (!config.has("credentialName")) config.put("credentialName", "")
+            if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization")
+            if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ")
+            if (!config.has("maxResponseBytes")) config.put("maxResponseBytes", 2_000_000)
+        }
         "YouTube" -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&q=technology"); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", "youtube_api_key"); if (!config.has("credentialHeader")) config.put("credentialHeader", "X-Goog-Api-Key"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "") }
         "GraphQL" -> { if (!config.has("url")) config.put("url", "https://example.com/graphql"); if (!config.has("query")) config.put("query", "query { hello }"); if (!config.has("variables")) config.put("variables", "{}"); if (!config.has("headers")) config.put("headers", "") }
         "Webhook Trigger", "Chat Trigger" -> { if (!config.has("method")) config.put("method", "POST"); if (!config.has("path")) config.put("path", "hook/" + id.toString().take(8)) }
