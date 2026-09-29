@@ -22,7 +22,7 @@ import java.util.concurrent.Executors
 interface ExecutionListener {
     fun onStatus(message: String)
     fun onLog(message: String)
-    fun onFinished(success: Boolean, message: String)
+    fun onFinished(success: Boolean, message: String, output: JSONObject)
 }
 
 class WorkflowEngine(private val context: Context) {
@@ -48,6 +48,7 @@ class WorkflowEngine(private val context: Context) {
             val variables = mutableMapOf<String, String>()
             var success = true
             var message = "Completed"
+            var finalData = JSONObject()
 
             fun report(text: String) {
                 listener?.onLog(text)
@@ -83,6 +84,7 @@ class WorkflowEngine(private val context: Context) {
                     put("trigger", if (background) "schedule" else "manual")
                     put("timestamp", now())
                 }
+                finalData = JSONObject(data.toString())
 
                 while (queue.isNotEmpty()) {
                     val id = queue.removeFirst()
@@ -122,6 +124,7 @@ class WorkflowEngine(private val context: Context) {
                         }
                     } else {
                         data = result.data
+                        finalData = JSONObject(data.toString())
 
                         if (result.stop) {
                             if (!result.success) {
@@ -171,6 +174,7 @@ class WorkflowEngine(private val context: Context) {
                         put("durationMs", System.currentTimeMillis() - started)
                         put("success", success)
                         put("message", message)
+                        put("output", finalData.toString().take(12000))
                     }
                 )
 
@@ -181,7 +185,7 @@ class WorkflowEngine(private val context: Context) {
                     )
                 }
 
-                listener?.onFinished(success, message)
+                listener?.onFinished(success, message, finalData)
             }
         }
     }
@@ -597,6 +601,15 @@ class WorkflowEngine(private val context: Context) {
                 connection.setRequestProperty(pair.key, pair.value)
             }
 
+        val credentialName = c.optString("credentialName").trim()
+        if (credentialName.isNotBlank()) {
+            val secret = CredentialVault.get(context, credentialName)
+                ?: throw IllegalStateException("Credential not found: " + credentialName)
+            val headerName = c.optString("credentialHeader", "Authorization")
+            val prefix = c.optString("credentialPrefix", "Bearer ")
+            connection.setRequestProperty(headerName, prefix + secret)
+        }
+
         if (method != "GET" && method != "HEAD") {
             connection.doOutput = true
             val body = render(c.optString("body"), input, variables)
@@ -789,7 +802,8 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val json = postJson(endpoint, key, body)
+        val resolvedKey = if (key.isNotBlank()) key else ""
+        val json = postJson(endpoint, resolvedKey, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
