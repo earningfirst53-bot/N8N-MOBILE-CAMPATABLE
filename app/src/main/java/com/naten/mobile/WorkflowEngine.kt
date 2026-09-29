@@ -468,7 +468,7 @@ class WorkflowEngine(private val context: Context) {
                     render(c.optString("filename", "output.txt"), input, variables)
                 )
                 val expression = c.optString("data").ifBlank {
-                    "{{\\$json}}"
+                    "{{\$json}}"
                 }
                 val file = java.io.File(context.filesDir, name)
                 file.writeText(render(expression, input, variables))
@@ -794,7 +794,7 @@ class WorkflowEngine(private val context: Context) {
 
     private fun lookupRaw(root: JSONObject, path: String): Any? {
         val clean = path
-            .removePrefix("{{\\$json.")
+            .removePrefix("{{\$json.")
             .removeSuffix("}}")
             .removePrefix("json.")
 
@@ -824,10 +824,10 @@ class WorkflowEngine(private val context: Context) {
         variables: Map<String, String>
     ): String {
         var result = source
-        result = result.replace("{{\\$now}}", now())
-        result = result.replace("{{\\$json}}", data.toString())
+        result = result.replace("{{\$now}}", now())
+        result = result.replace("{{\$json}}", data.toString())
 
-        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
+        val jsonPattern = Regex("\\{\\{\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
         jsonPattern.findAll(result).toList().asReversed().forEach { match ->
             val key = match.groupValues.getOrElse(1) { "" }
             result = result.replace(
@@ -836,7 +836,7 @@ class WorkflowEngine(private val context: Context) {
             )
         }
 
-        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
+        val varsPattern = Regex("\\{\\{\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
         varsPattern.findAll(result).toList().asReversed().forEach { match ->
             result = result.replace(
                 match.value,
