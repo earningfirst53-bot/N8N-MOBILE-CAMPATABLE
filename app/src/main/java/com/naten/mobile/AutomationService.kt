@@ -75,7 +75,7 @@ class AutomationService : Service() {
 
                 override fun onLog(message: String) = Unit
 
-                override fun onFinished(success: Boolean, message: String) {
+                override fun onFinished(success: Boolean, message: String, output: JSONObject) {
                     updateNotification(
                         "NATEN • " + state.name,
                         if (success) message else "Failed: " + message
