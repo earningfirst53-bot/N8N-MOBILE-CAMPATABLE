@@ -540,10 +540,14 @@ class WorkflowEngine(private val context: Context) {
             "AI Text", "AI Agent" -> {
                 val provider = c.optString("provider", "OpenAI-compatible")
                 val prompt = render(c.optString("prompt"), input, variables)
+                val credentialName = c.optString("credentialName").trim()
+                val apiKey = c.optString("apiKey").ifBlank {
+                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
+                }
                 val answer = if (provider == "Gemini") {
                     callGemini(
                         c.optString("endpoint"),
-                        c.optString("apiKey"),
+                        apiKey,
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -551,7 +555,7 @@ class WorkflowEngine(private val context: Context) {
                 } else {
                     callOpenAiCompatible(
                         c.optString("endpoint"),
-                        c.optString("apiKey"),
+                        apiKey,
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
