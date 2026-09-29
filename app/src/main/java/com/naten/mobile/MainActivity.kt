@@ -880,10 +880,7 @@ AI Text can call Gemini or OpenAI-compatible endpoints.
 Wait, files, variables, notifications, sharing and URL actions are executed by Android.
 The Active switch schedules Schedule Trigger workflows using Android alarms.
 
-Expressions supported:
-{{\$json.field}}
-{{\$vars.name}}
-{{\$now}}
+Expressions supported: JSON fields, workflow variables, and current time.
 
 Files are stored in this app's private NATEN storage area.
 """.trimIndent()
