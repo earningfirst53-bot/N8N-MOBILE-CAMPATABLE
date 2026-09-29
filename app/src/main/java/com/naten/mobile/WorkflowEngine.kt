@@ -27,6 +27,7 @@ interface ExecutionListener {
 
 class WorkflowEngine(private val context: Context) {
     private val executor = Executors.newCachedThreadPool()
+    private val timeoutExecutor = Executors.newCachedThreadPool()
 
     fun run(
         state: WorkflowState,
@@ -50,13 +51,14 @@ class WorkflowEngine(private val context: Context) {
             var message = "Completed"
             var finalData = JSONObject()
 
+            data class WorkItem(val nodeId: Int, val data: JSONObject)
+
             fun report(text: String) {
                 listener?.onLog(text)
             }
 
             try {
                 require(state.nodes.isNotEmpty()) { "Workflow has no nodes." }
-
                 val byId = state.nodes.associateBy { it.id }
                 val outgoing = state.edges.groupBy { it.from }
 
@@ -64,98 +66,107 @@ class WorkflowEngine(private val context: Context) {
                     input != null -> state.nodes.filter {
                         it.type == "Webhook Trigger" || it.type == "Chat Trigger"
                     }
-                    background -> state.nodes.filter {
-                        it.type == "Schedule Trigger"
-                    }
-                    else -> state.nodes.filter {
-                        it.type == "Manual Trigger"
-                    }
+                    background -> state.nodes.filter { it.type == "Schedule Trigger" }
+                    else -> state.nodes.filter { it.type == "Manual Trigger" }
                 }.ifEmpty {
                     state.nodes.filter { it.type.endsWith("Trigger") }
                 }.ifEmpty {
                     listOf(state.nodes.minByOrNull { it.id }!!)
                 }
 
-                val queue = java.util.ArrayDeque<Int>()
-                starts.forEach { queue.addLast(it.id) }
-
-                val visited = mutableSetOf<Int>()
-                var data = input?.let { JSONObject(it.toString()) } ?: JSONObject().apply {
+                val initial = input?.let { JSONObject(it.toString()) } ?: JSONObject().apply {
                     put("trigger", if (background) "schedule" else "manual")
                     put("timestamp", now())
                 }
-                finalData = JSONObject(data.toString())
+
+                val queue = java.util.ArrayDeque<WorkItem>()
+                starts.forEach { queue.addLast(WorkItem(it.id, JSONObject(initial.toString()))) }
 
                 while (queue.isNotEmpty()) {
-                    val id = queue.removeFirst()
-                    if (!visited.add(id)) continue
-
-                    val node = byId[id] ?: continue
+                    val work = queue.removeFirst()
+                    val node = byId[work.nodeId] ?: continue
+                    val nodeInput = JSONObject(work.data.toString())
                     node.ensureDefaultConfig()
+
                     listener?.onStatus("Running: " + node.title)
                     report("▶ " + node.type + ": " + node.title)
 
                     val maxAttempts = node.config.optInt("retries", 0).coerceIn(0, 5)
+                    val timeoutSeconds = node.config.optLong("timeoutSeconds", 60).coerceIn(1, 3600)
                     var result: NodeResult? = null
                     var lastError: Throwable? = null
 
                     for (attempt in 0..maxAttempts) {
+                        val future = timeoutExecutor.submit<NodeResult> {
+                            executeNode(node, nodeInput, variables, background, ::report)
+                        }
                         try {
-                            result = executeNode(node, data, variables, background, ::report)
+                            result = future.get(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
                             lastError = null
                             break
+                        } catch (t: java.util.concurrent.TimeoutException) {
+                            future.cancel(true)
+                            lastError = IllegalStateException(
+                                "Node timed out after " + timeoutSeconds + "s"
+                            )
                         } catch (t: Throwable) {
-                            lastError = t
-                            if (attempt < maxAttempts) {
-                                report("Retry " + (attempt + 1) + "/" + maxAttempts)
-                            }
+                            future.cancel(true)
+                            lastError = t.cause ?: t
+                        }
+
+                        if (attempt < maxAttempts) {
+                            report("Retry " + (attempt + 1) + "/" + maxAttempts)
                         }
                     }
 
                     if (result == null) {
+                        val fallback = JSONObject(nodeInput.toString()).apply {
+                            put("error", lastError?.message ?: "Node failed")
+                            put("errorNode", node.title)
+                        }
                         if (node.config.optBoolean("continueOnFail", false)) {
                             report("Continuing after error")
-                            data = JSONObject(data.toString()).apply {
-                                put("error", lastError?.message ?: "Node failed")
-                                put("errorNode", node.title)
+                            finalData = JSONObject(fallback.toString())
+                            outgoing[node.id].orEmpty().forEach { edge ->
+                                queue.addLast(
+                                    WorkItem(edge.to, JSONObject(fallback.toString()))
+                                )
                             }
-                        } else {
-                            throw lastError ?: IllegalStateException("Node failed")
+                            continue
                         }
+                        throw lastError ?: IllegalStateException("Node failed")
+                    }
+
+                    finalData = JSONObject(result!!.data.toString())
+
+                    if (result!!.stop) {
+                        if (!result!!.success) throw IllegalStateException(result!!.message)
+                        message = result!!.message
+                        break
+                    }
+
+                    val selected = if (result!!.branch.isNullOrBlank()) {
+                        outgoing[node.id].orEmpty()
                     } else {
-                        data = result.data
-                        finalData = JSONObject(data.toString())
-
-                        if (result.stop) {
-                            if (!result.success) {
-                                throw IllegalStateException(result.message)
-                            }
-                            message = result.message
-                            break
+                        val exact = outgoing[node.id].orEmpty().filter {
+                            it.branch.equals(result!!.branch, ignoreCase = true)
                         }
-
-                        val next = outgoing[id].orEmpty()
-                        val selected = if (result.branch.isNullOrBlank()) {
-                            next
-                        } else {
-                            val exact = next.filter {
-                                it.branch.equals(result.branch, ignoreCase = true)
-                            }
-                            if (exact.isNotEmpty()) exact
-                            else next.filter {
-                                it.branch.equals("default", ignoreCase = true)
-                            }
+                        if (exact.isNotEmpty()) exact
+                        else outgoing[node.id].orEmpty().filter {
+                            it.branch.equals("default", ignoreCase = true)
                         }
+                    }
 
-                        selected.forEach { edge ->
-                            if (byId.containsKey(edge.to)) queue.addLast(edge.to)
+                    val payloads = result!!.fanOut.ifEmpty { listOf(result!!.data) }
+                    selected.forEach { edge ->
+                        payloads.forEach { payload ->
+                            queue.addLast(
+                                WorkItem(edge.to, JSONObject(payload.toString()))
+                            )
                         }
                     }
                 }
 
-                if (message == "Completed") {
-                    message = "Completed " + visited.size + " node(s)"
-                }
                 listener?.onStatus("Workflow completed")
                 report("✓ " + message)
             } catch (t: Throwable) {
@@ -195,7 +206,8 @@ class WorkflowEngine(private val context: Context) {
         val branch: String? = null,
         val stop: Boolean = false,
         val success: Boolean = true,
-        val message: String = ""
+        val message: String = "",
+        val fanOut: List<JSONObject> = emptyList()
     )
 
     private fun executeNode(
@@ -206,6 +218,10 @@ class WorkflowEngine(private val context: Context) {
         report: (String) -> Unit
     ): NodeResult {
         val c = node.config
+
+        if (node.type in NodeCatalog.apiBackedTypes) {
+            return executeHttp(c, input, variables, report)
+        }
 
         return when (node.type) {
             "Manual Trigger", "Schedule Trigger", "Webhook Trigger",
@@ -334,11 +350,30 @@ class WorkflowEngine(private val context: Context) {
             "Loop Over Items" -> {
                 val out = JSONObject(input.toString())
                 val items = input.optJSONArray("_items")
-                if (items != null) {
-                    out.put("_loopBatchSize", c.optInt("batchSize", 1).coerceAtLeast(1))
-                    out.put("_loopCount", items.length())
+                if (items == null || items.length() == 0) {
+                    NodeResult(out)
+                } else {
+                    val batchSize = c.optInt("batchSize", 1).coerceAtLeast(1)
+                    val batches = mutableListOf<JSONObject>()
+                    var start = 0
+                    while (start < items.length()) {
+                        val end = minOf(start + batchSize, items.length())
+                        val batch = JSONArray()
+                        for (i in start until end) batch.put(items.get(i))
+                        batches.add(
+                            JSONObject(input.toString()).apply {
+                                put("_items", batch)
+                                put("_batchStart", start)
+                                put("_itemCount", batch.length())
+                            }
+                        )
+                        start = end
+                    }
+                    NodeResult(
+                        data = batches.first(),
+                        fanOut = batches
+                    )
                 }
-                NodeResult(out)
             }
 
             "Summarize" -> {

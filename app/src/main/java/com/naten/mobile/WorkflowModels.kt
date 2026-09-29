@@ -214,105 +214,110 @@ object WorkflowStore {
 }
 
 fun FlowNode.ensureDefaultConfig() {
-    if (config.length() > 0) return
+    if (!config.has("retries")) config.put("retries", 0)
+    if (!config.has("timeoutSeconds")) config.put("timeoutSeconds", 60)
+    if (!config.has("continueOnFail")) config.put("continueOnFail", false)
 
     when (type) {
         "Schedule Trigger" -> {
-            config.put("interval", 60)
-            config.put("unit", "minutes")
+            if (!config.has("interval")) config.put("interval", 60)
+            if (!config.has("unit")) config.put("unit", "minutes")
         }
         "HTTP Request", "Generic API" -> {
-            config.put("method", "GET")
-            config.put("url", "https://example.com")
-            config.put("headers", "")
-            config.put("body", "")
+            if (!config.has("method")) config.put("method", "GET")
+            if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty().ifBlank { "https://example.com" })
+            if (!config.has("headers")) config.put("headers", "")
+            if (!config.has("body")) config.put("body", "")
+            if (!config.has("credentialName")) config.put("credentialName", "")
+            if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization")
+            if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ")
         }
         "GraphQL" -> {
-            config.put("url", "https://example.com/graphql")
-            config.put("query", "query { hello }")
-            config.put("variables", "{}")
-            config.put("headers", "")
+            if (!config.has("url")) config.put("url", "https://example.com/graphql")
+            if (!config.has("query")) config.put("query", "query { hello }")
+            if (!config.has("variables")) config.put("variables", "{}")
+            if (!config.has("headers")) config.put("headers", "")
         }
         "Webhook Trigger", "Chat Trigger" -> {
-            val suffix = id.toString().take(8)
-            config.put("method", "POST")
-            config.put("path", "hook/" + suffix)
+            if (!config.has("method")) config.put("method", "POST")
+            if (!config.has("path")) config.put("path", "hook/" + id.toString().take(8))
         }
-        "Edit Fields" -> config.put("fields", "message=Hello")
-        "Filter" -> {
-            config.put("field", "value")
-            config.put("operator", "exists")
-            config.put("value", "")
-        }
-        "IF" -> {
-            config.put("field", "value")
-            config.put("operator", "equals")
-            config.put("value", "")
+        "Edit Fields" -> if (!config.has("fields")) config.put("fields", "message=Hello")
+        "Filter", "IF" -> {
+            if (!config.has("field")) config.put("field", "value")
+            if (!config.has("operator")) config.put("operator", "exists")
+            if (!config.has("value")) config.put("value", "")
         }
         "Switch" -> {
-            config.put("field", "value")
-            config.put("cases", "one\ntwo\nthree")
+            if (!config.has("field")) config.put("field", "value")
+            if (!config.has("cases")) config.put("cases", "one\ntwo\nthree")
         }
-        "Wait" -> config.put("seconds", 2)
-        "Limit" -> config.put("count", 10)
-        "Remove Duplicates" -> config.put("field", "id")
-        "Rename Keys" -> config.put("mapping", "old=new")
+        "Wait" -> if (!config.has("seconds")) config.put("seconds", 2)
+        "Limit" -> if (!config.has("count")) config.put("count", 10)
+        "Remove Duplicates" -> if (!config.has("field")) config.put("field", "id")
+        "Rename Keys" -> if (!config.has("mapping")) config.put("mapping", "old=new")
         "Sort" -> {
-            config.put("field", "value")
-            config.put("descending", false)
+            if (!config.has("field")) config.put("field", "value")
+            if (!config.has("descending")) config.put("descending", false)
         }
-        "Split Out" -> config.put("field", "items")
+        "Split Out" -> if (!config.has("field")) config.put("field", "items")
         "Summarize" -> {
-            config.put("field", "value")
-            config.put("operation", "count")
+            if (!config.has("field")) config.put("field", "value")
+            if (!config.has("operation")) config.put("operation", "count")
         }
-        "JSON Parse" -> config.put("field", "text")
-        "JSON Stringify" -> config.put("field", "json")
-        "Date & Time" -> config.put("format", "yyyy-MM-dd HH:mm:ss")
+        "JSON Parse" -> if (!config.has("field")) config.put("field", "text")
+        "JSON Stringify" -> if (!config.has("field")) config.put("field", "json")
+        "Date & Time" -> if (!config.has("format")) config.put("format", "yyyy-MM-dd HH:mm:ss")
         "Code" -> {
-            config.put("operation", "uppercase")
-            config.put("field", "text")
-            config.put("outputField", "text")
-            config.put("value", "Hello")
+            if (!config.has("operation")) config.put("operation", "uppercase")
+            if (!config.has("field")) config.put("field", "text")
+            if (!config.has("outputField")) config.put("outputField", "text")
+            if (!config.has("value")) config.put("value", "Hello")
         }
-        "Markdown" -> config.put("field", "text")
-        "HTML" -> config.put("field", "html")
-        "XML" -> config.put("field", "xml")
-        "Crypto" -> config.put("field", "text")
-        "Read File", "Extract From File" -> config.put("filename", "input.txt")
+        "Markdown" -> if (!config.has("field")) config.put("field", "text")
+        "HTML" -> if (!config.has("field")) config.put("field", "html")
+        "XML" -> if (!config.has("field")) config.put("field", "xml")
+        "Crypto" -> if (!config.has("field")) config.put("field", "text")
+        "Read File", "Extract From File" -> if (!config.has("filename")) config.put("filename", "input.txt")
         "Write File", "Convert to File" -> {
-            config.put("filename", "output.txt")
-            config.put("data", "{{\$json}}")
+            if (!config.has("filename")) config.put("filename", "output.txt")
+            if (!config.has("data")) config.put("data", "{{" + '$' + "json}}")
         }
         "Set Variable" -> {
-            config.put("key", "name")
-            config.put("value", "NATEN")
+            if (!config.has("key")) config.put("key", "name")
+            if (!config.has("value")) config.put("value", "NATEN")
         }
         "Respond to Webhook" -> {
-            config.put("body", "Workflow completed")
-            config.put("statusCode", 200)
+            if (!config.has("body")) config.put("body", "{{" + '$' + "json}}")
+            if (!config.has("statusCode")) config.put("statusCode", 200)
         }
-        "Execute Sub-workflow" -> {
-            config.put("workflowId", "")
-        }
-        "Log" -> config.put("message", "{{\$json}}")
+        "Execute Sub-workflow" -> if (!config.has("workflowId")) config.put("workflowId", "")
+        "Log" -> if (!config.has("message")) config.put("message", "{{" + '$' + "json}}")
         "Notification" -> {
-            config.put("title", "NATEN")
-            config.put("message", "Workflow finished")
+            if (!config.has("title")) config.put("title", "NATEN")
+            if (!config.has("message")) config.put("message", "Workflow finished")
         }
-        "Open URL" -> config.put("url", "https://n8n.io")
-        "Share Text" -> config.put("text", "Hello from NATEN")
+        "Open URL" -> if (!config.has("url")) config.put("url", "https://n8n.io")
+        "Share Text" -> if (!config.has("text")) config.put("text", "Hello from NATEN")
         "AI Text", "AI Agent" -> {
-            config.put("provider", "OpenAI-compatible")
-            config.put("endpoint", "https://api.openai.com/v1/chat/completions")
-            config.put("apiKey", "")
-            config.put("model", "gpt-4o-mini")
-            config.put("prompt", "Work with this data: {{\$json}}")
-            config.put("temperature", 0.4)
+            if (!config.has("provider")) config.put("provider", "OpenAI-compatible")
+            if (!config.has("endpoint")) config.put("endpoint", "https://api.openai.com/v1/chat/completions")
+            if (!config.has("apiKey")) config.put("apiKey", "")
+            if (!config.has("model")) config.put("model", "gpt-4o-mini")
+            if (!config.has("prompt")) config.put("prompt", "Work with this data: {{" + '$' + "json}}")
+            if (!config.has("temperature")) config.put("temperature", 0.4)
+            if (!config.has("credentialName")) config.put("credentialName", "")
         }
-        "Loop Over Items" -> config.put("batchSize", 1)
-        "No Operation", "Merge", "Manual Trigger", "Webhook Trigger",
-        "Error Trigger", "Chat Trigger", "Email", "Telegram", "Slack",
-        "Google Sheets", "Gmail", "Stop / Error" -> Unit
+        "Loop Over Items" -> if (!config.has("batchSize")) config.put("batchSize", 1)
+        in NodeCatalog.apiBackedTypes -> {
+            if (!config.has("method")) config.put("method", "GET")
+            if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty())
+            if (!config.has("headers")) config.put("headers", "")
+            if (!config.has("body")) config.put("body", "")
+            if (!config.has("credentialName")) config.put("credentialName", "")
+            if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization")
+            if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ")
+        }
+        else -> Unit
     }
 }

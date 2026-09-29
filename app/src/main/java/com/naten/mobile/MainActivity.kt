@@ -415,6 +415,16 @@ class MainActivity : Activity() {
         val fields = linkedMapOf<String, EditText>()
         val spinners = linkedMapOf<String, Spinner>()
 
+        fields["retries"] = textField("retries", "Retries (0–5)")
+        fields["retries"]?.inputType = InputType.TYPE_CLASS_NUMBER
+        fields["timeoutSeconds"] = textField("timeoutSeconds", "Node timeout (seconds)")
+        fields["timeoutSeconds"]?.inputType = InputType.TYPE_CLASS_NUMBER
+        spinners["continueOnFail"] = spinner(
+            "continueOnFail",
+            "Continue on failure",
+            listOf("false", "true")
+        )
+
         when (node.type) {
             "Schedule Trigger" -> {
                 fields["interval"] = textField("interval", "Interval")
@@ -429,7 +439,7 @@ class MainActivity : Activity() {
                 label("Webhook listener: http://PHONE_IP:8787/<path>")
             }
 
-            "HTTP Request", "Generic API", "Email", "Telegram", "Slack", "Google Sheets", "Gmail" -> {
+            in NodeCatalog.apiBackedTypes -> {
                 spinners["method"] = spinner("method", "Method", listOf("GET", "POST", "PUT", "PATCH", "DELETE"))
                 fields["url"] = textField("url", "URL")
                 fields["headers"] = textField("headers", "Headers (one per line: Key: Value)", true)
@@ -839,6 +849,14 @@ class MainActivity : Activity() {
                 append("\nLocal webhook port: 8787")
                 append("\nUse http://PHONE_IP:8787/<your-path>")
             }
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+                append("\nBattery optimization exemption: ")
+                append(if (pm.isIgnoringBatteryOptimizations(packageName)) "ON" else "OFF")
+                if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                    append("\nFor reliability, allow NATEN to run without battery optimization.")
+                }
+            }
         }
 
         AlertDialog.Builder(this)
@@ -848,6 +866,11 @@ class MainActivity : Activity() {
                 syncAutomation()
                 Toast.makeText(this, "Automation resynced", Toast.LENGTH_SHORT).show()
             })
+            .setNeutralButton("Battery settings") { _, _ ->
+                runCatching {
+                    startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                }
+            }
             .setNegativeButton("Close", null)
             .show()
     }
@@ -1009,7 +1032,7 @@ class MainActivity : Activity() {
         "Code" -> "n8n-nodes-base.code"
         "Respond to Webhook" -> "n8n-nodes-base.respondToWebhook"
         "Execute Sub-workflow" -> "n8n-nodes-base.executeWorkflow"
-        else -> "n8n-nodes-base.noOp"
+        else -> if (type in NodeCatalog.apiBackedTypes) "n8n-nodes-base.httpRequest" else "n8n-nodes-base.noOp"
     }
 
     private fun importN8nJson(root: JSONObject): WorkflowState {

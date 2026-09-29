@@ -225,16 +225,21 @@ class AutomationService : Service() {
 
             latch.await(5, TimeUnit.MINUTES)
 
-            sendResponse(
-                it,
-                if (success) 200 else 500,
-                JSONObject().apply {
-                    put("workflow", matched.name)
-                    put("success", success)
-                    put("message", message)
-                    put("output", output)
-                }
-            )
+            if (success && output.has("_webhookResponse")) {
+                val responseCode = output.optInt("_webhookStatus", 200).coerceIn(100, 599)
+                sendRawResponse(it, responseCode, output.optString("_webhookResponse"))
+            } else {
+                sendResponse(
+                    it,
+                    if (success) 200 else 500,
+                    JSONObject().apply {
+                        put("workflow", matched.name)
+                        put("success", success)
+                        put("message", message)
+                        put("output", output)
+                    }
+                )
+            }
         }
     }
 
@@ -280,6 +285,19 @@ class AutomationService : Service() {
             )
         }
         return out
+    }
+
+    private fun sendRawResponse(socket: Socket, code: Int, body: String) {
+        val output = OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8)
+        val bytes = body.toByteArray(Charsets.UTF_8)
+        output.write(
+            "HTTP/1.1 " + code + " " + statusText(code) + "\r\n" +
+                "Content-Type: text/plain; charset=utf-8\r\n" +
+                "Content-Length: " + bytes.size + "\r\n" +
+                "Connection: close\r\n\r\n"
+        )
+        output.write(body)
+        output.flush()
     }
 
     private fun sendResponse(socket: Socket, code: Int, body: JSONObject) {

@@ -468,3 +468,25 @@ The result of these workflows must be visible in execution history.
 NATEN is intended to become a mobile-first automation platform, not a skin around n8n.
 
 Current n8n contains a very large and changing integration ecosystem. NATEN should progressively cover that ecosystem through native adapters, generic API support, and compatible workflow import/export rather than falsely claiming one APK implements every n8n node immediately.
+
+
+## Execution directive — current user build
+
+Priority order: make NATEN a reliable mobile automation platform before visual polish.
+
+Required now:
+- preserve all working current functionality
+- eliminate duplicated runtime code and build regressions
+- expand the node library substantially
+- expose only real executable nodes
+- use API-backed integrations as real runtime adapters
+- add per-node retries, timeouts and continue-on-fail
+- execute item collections and loop/batch branches for real
+- return actual webhook response bodies/status
+- keep schedule and webhook automation working with the Android UI closed
+- surface battery/power restrictions in the automation status screen
+- verify the APK through successful GitHub Actions before delivery
+
+The target is progressive functional parity with n8n: core workflow semantics first, then integrations, credentials/OAuth, AI/MCP, and mobile-editor parity. Do not claim all current n8n integrations exist in one release.
+
+Background automation is mandatory. A workflow must not depend on the Activity process remaining visible. Scheduled workflows use Android scheduling and background execution; webhook workflows use the explicit foreground automation service when enabled.
