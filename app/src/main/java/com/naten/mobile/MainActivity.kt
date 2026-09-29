@@ -1071,7 +1071,7 @@ Background:
 • The phone OS can still defer or restrict background work according to its power-management rules.
 
 Expressions:
-Use {{$json.field}}, {{$vars.name}} and {{$now}} in node parameters.
+Use JSON fields, workflow variables and current-time expressions in node parameters.
 
 Integrations:
 Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that don't have a dedicated adapter. Dedicated integration buttons currently use the same API execution layer.
