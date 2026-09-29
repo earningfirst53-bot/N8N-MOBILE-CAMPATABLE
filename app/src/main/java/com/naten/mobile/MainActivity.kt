@@ -911,7 +911,7 @@ Files are stored in this app's private NATEN storage area.
 
     private fun editField(label: String, value: String): EditText = EditText(this).apply {
         hint = label
-        text = value
+        setText(value)
         textSize = 14f
         setSingleLine(false)
         setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -941,6 +941,7 @@ Files are stored in this app's private NATEN storage area.
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
     private fun dpF(v: Int): Float = v * resources.displayMetrics.density
+    private fun dpF(v: Float): Float = v * resources.displayMetrics.density
 
     inner class WorkflowCanvas(context: Context) : View(context) {
         val nodes = state.nodes
