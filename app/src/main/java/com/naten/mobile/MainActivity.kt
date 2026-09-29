@@ -49,6 +49,8 @@ class MainActivity : Activity() {
     private lateinit var logView: TextView
     private lateinit var nameView: TextView
     private lateinit var activeSwitch: Switch
+    private lateinit var editorFrame: FrameLayout
+    private var nodePanel: View? = null
 
     private var state = WorkflowState()
     private val logLines = mutableListOf<String>()
@@ -141,6 +143,7 @@ class MainActivity : Activity() {
         nav("⚙   Settings", action = { showMoreMenu() })
 
         val editor = FrameLayout(this)
+        editorFrame = editor
         workspace.addView(editor, LinearLayout.LayoutParams(0, -1, 1f))
 
         val topbar = LinearLayout(this).apply {
@@ -449,53 +452,82 @@ class MainActivity : Activity() {
     }
 
     private fun showNodeLibrary() {
-        val box = LinearLayout(this).apply {
+        nodePanel?.let { editorFrame.removeView(it) }
+
+        val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(2), dp(8), dp(2))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            setBackgroundColor(Color.rgb(29, 30, 33))
+            elevation = dpF(18f)
         }
+        nodePanel = panel
+
+        val header = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(TextView(this).apply {
+            text = "What happens next?"
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }, LinearLayout.LayoutParams(0, dp(38), 1f))
+
+        val close = TextView(this).apply {
+            text = "×"
+            textSize = 24f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(180, 183, 191))
+            setOnClickListener { nodePanel?.let { editorFrame.removeView(it) }; nodePanel = null }
+        }
+        header.addView(close, LinearLayout.LayoutParams(dp(38), dp(38)))
+        panel.addView(header)
+
+        panel.addView(TextView(this).apply {
+            text = "Add a node to continue building this workflow."
+            textSize = 11f
+            setTextColor(Color.rgb(145, 149, 158))
+            setPadding(0, 0, 0, dp(10))
+        })
 
         val search = EditText(this).apply {
-            hint = "Search nodes…"
-            textSize = 14f
+            hint = "Search nodes"
+            textSize = 13f
             setSingleLine(true)
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            background = rounded(Color.WHITE, 10f, Color.rgb(208, 213, 221), 1)
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.rgb(120, 124, 133))
+            setPadding(dp(11), 0, dp(11), 0)
+            background = rounded(Color.rgb(38, 39, 43), 8f, Color.rgb(73, 75, 81), 1)
         }
-        box.addView(search)
+        panel.addView(search, LinearLayout.LayoutParams(-1, dp(40)).apply {
+            bottomMargin = dp(8)
+        })
 
-        val category = Spinner(this)
-        category.adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            NodeCatalog.categories()
-        )
-        box.addView(category)
+        val category = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                NodeCatalog.categories()
+            )
+        }
+        panel.addView(category, LinearLayout.LayoutParams(-1, dp(38)).apply {
+            bottomMargin = dp(8)
+        })
 
         val list = ListView(this)
-        box.addView(list, LinearLayout.LayoutParams(-1, dp(420)))
-
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("Node Library")
-            .setView(box)
-            .setNegativeButton("Close", null)
-            .create()
+        panel.addView(list, LinearLayout.LayoutParams(-1, 0, 1f))
 
         fun refresh() {
             val defs = NodeCatalog.search(
                 search.text.toString(),
                 category.selectedItem?.toString() ?: "All"
             )
-            val labels = defs.map { it.type + "  •  " + it.category + "\n" + it.description }
+            val labels = defs.map { it.type + "\n" + it.description }
             list.adapter = ArrayAdapter(
                 this,
                 android.R.layout.simple_list_item_2,
                 android.R.id.text1,
                 labels
             )
-            list.setOnItemClickListener { _, _, position, _ ->
-                addNode(defs[position].type)
-                dialog.dismiss()
-            }
         }
 
         search.addTextChangedListener(object : TextWatcher {
@@ -510,8 +542,27 @@ class MainActivity : Activity() {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
         }
 
+        list.setOnItemClickListener { _, _, position, _ ->
+            val defs = NodeCatalog.search(
+                search.text.toString(),
+                category.selectedItem?.toString() ?: "All"
+            )
+            defs.getOrNull(position)?.let {
+                addNode(it.type)
+                nodePanel?.let { v -> editorFrame.removeView(v) }
+                nodePanel = null
+            }
+        }
+
         refresh()
-        dialog.show()
+
+        editorFrame.addView(
+            panel,
+            FrameLayout.LayoutParams(dp(330), -1, Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(56)
+                bottomMargin = dp(58)
+            }
+        )
     }
 
     private fun showNodeEditor(node: FlowNode) {
