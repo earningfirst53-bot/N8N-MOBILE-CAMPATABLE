@@ -19,6 +19,7 @@ import android.text.TextWatcher
 import android.text.Editable
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
