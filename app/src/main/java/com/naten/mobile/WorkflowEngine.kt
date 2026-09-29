@@ -17,7 +17,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 interface ExecutionListener {
     fun onStatus(message: String)
@@ -498,6 +500,17 @@ class WorkflowEngine(private val context: Context) {
                 NodeResult(JSONObject(input.toString()))
             }
 
+            "Respond to Webhook" -> {
+                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
+                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("_webhookResponse", body)
+                    put("_webhookStatus", statusCode)
+                })
+            }
+
+            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
+
             "Open URL" -> {
                 val url = render(c.optString("url"), input, variables)
                 if (!background && url.isNotBlank()) {
@@ -569,6 +582,52 @@ class WorkflowEngine(private val context: Context) {
 
             else -> NodeResult(JSONObject(input.toString()))
         }
+    }
+
+    private fun executeSubWorkflow(
+        c: JSONObject,
+        input: JSONObject,
+        background: Boolean,
+        report: (String) -> Unit
+    ): NodeResult {
+        val workflowId = c.optString("workflowId").trim()
+        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
+
+        val sub = WorkflowStore.load(context, workflowId)
+            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
+
+        val latch = CountDownLatch(1)
+        var ok = false
+        var message = "Sub-workflow did not finish"
+        var output = JSONObject()
+
+        WorkflowEngine(context).runWithInput(
+            state = sub,
+            input = JSONObject(input.toString()),
+            listener = object : ExecutionListener {
+                override fun onStatus(status: String) {
+                    report("Sub-workflow: " + status)
+                }
+
+                override fun onLog(log: String) {
+                    report("Sub-workflow log: " + log)
+                }
+
+                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
+                    ok = success
+                    message = result
+                    output = JSONObject(finalOutput.toString())
+                    latch.countDown()
+                }
+            },
+            background = background
+        )
+
+        latch.await(10, TimeUnit.MINUTES)
+        if (!ok) throw IllegalStateException(message)
+
+        report("Sub-workflow completed")
+        return NodeResult(output)
     }
 
     private fun renderExpressionField(
