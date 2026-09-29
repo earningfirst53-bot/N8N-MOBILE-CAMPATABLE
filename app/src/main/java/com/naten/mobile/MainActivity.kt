@@ -4,13 +4,34 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
-import android.graphics.*
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PointF
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
-import android.view.*
-import android.widget.*
+import android.text.TextWatcher
+import android.text.Editable
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.HorizontalScrollView
+import android.widget.LinearLayout
+import android.widget.ListView
+import android.widget.ScrollView
+import android.widget.Spinner
+import android.widget.Switch
+import android.widget.TextView
+import android.widget.Toast
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -18,6 +39,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 class MainActivity : Activity() {
     private lateinit var canvas: WorkflowCanvas
@@ -26,87 +48,52 @@ class MainActivity : Activity() {
     private lateinit var nameView: TextView
     private lateinit var activeSwitch: Switch
 
-    private val prefs by lazy { getSharedPreferences("naten", MODE_PRIVATE) }
     private var state = WorkflowState()
-    private var logLines = mutableListOf<String>()
-    private val engine by lazy { WorkflowEngine(this) }
-
-    private data class PaletteItem(val type: String, val title: String, val hint: String)
-
-    private val paletteItems = listOf(
-        PaletteItem("Manual Trigger", "Manual", "Start"),
-        PaletteItem("Schedule Trigger", "Schedule", "Timer"),
-        PaletteItem("Webhook Trigger", "Webhook", "HTTP"),
-        PaletteItem("HTTP Request", "HTTP", "API"),
-        PaletteItem("Edit Fields", "Set", "Data"),
-        PaletteItem("IF", "IF", "Branch"),
-        PaletteItem("Switch", "Switch", "Routes"),
-        PaletteItem("Wait", "Wait", "Delay"),
-        PaletteItem("AI Text", "AI", "LLM"),
-        PaletteItem("Code", "Code", "Transform"),
-        PaletteItem("Notification", "Notify", "Phone"),
-        PaletteItem("Open URL", "Open URL", "Browser"),
-        PaletteItem("Share Text", "Share", "Android"),
-        PaletteItem("Read File", "Read File", "Storage"),
-        PaletteItem("Write File", "Write File", "Storage"),
-        PaletteItem("Set Variable", "Variable", "State"),
-        PaletteItem("Log", "Log", "Debug"),
-        PaletteItem("Stop / Error", "Stop", "End"),
-        PaletteItem("Merge", "Merge", "Flow")
-    )
+    private val logLines = mutableListOf<String>()
+    private val engine by lazy { WorkflowEngine(applicationContext) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val saved = WorkflowJson.load(this)
-        state = saved ?: starterWorkflow()
+
+        state = WorkflowStore.loadCurrent(this) ?: starterWorkflow()
         state.nodes.forEach { it.ensureDefaultConfig() }
+
         buildUi()
+        WorkflowStore.save(this, state)
         refreshUi()
-        WorkflowJson.save(this, state)
         requestNotificationPermission()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-    }
-
-    private fun requestNotificationPermission() {
-        if (android.os.Build.VERSION.SDK_INT >= 33 &&
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(
-                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
-                REQ_NOTIFICATIONS
-            )
-        }
+        syncAutomation()
     }
 
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(245, 247, 250))
+            setBackgroundColor(Color.rgb(244, 246, 249))
         }
 
         val toolbar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(8))
+            setPadding(dp(12), dp(8), dp(12), dp(7))
             setBackgroundColor(Color.WHITE)
         }
 
-        val top = LinearLayout(this).apply {
+        val titleRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
         }
 
         nameView = TextView(this).apply {
             text = state.name
-            textSize = 21f
+            textSize = 20f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(24, 28, 34))
-            setPadding(0, 0, dp(6), 0)
-            isClickable = true
+            setTextColor(Color.rgb(25, 29, 36))
+            setPadding(0, 0, dp(8), 0)
             setOnClickListener { renameWorkflow() }
         }
-        top.addView(nameView, LinearLayout.LayoutParams(0, dp(44), 1f))
+        titleRow.addView(nameView, LinearLayout.LayoutParams(0, dp(42), 1f))
+
+        val workflowsButton = toolbarButton("Workflows")
+        workflowsButton.setOnClickListener { showWorkflows() }
+        titleRow.addView(workflowsButton)
 
         activeSwitch = Switch(this).apply {
             text = "Active"
@@ -114,78 +101,70 @@ class MainActivity : Activity() {
             isChecked = state.active
             setOnCheckedChangeListener { _, checked ->
                 state.active = checked
-                WorkflowJson.save(this@MainActivity, state)
+                WorkflowStore.save(this@MainActivity, state)
+                syncAutomation()
                 if (checked) {
-                    val schedule = WorkflowScheduler.schedule(this@MainActivity, state)
-                    setStatus("Automation active", schedule ?: "Add a Schedule Trigger to run in background.")
+                    setStatus(
+                        "Automation active",
+                        "Scheduled workflows can run while NATEN is closed. Webhook workflows keep a background listener."
+                    )
                 } else {
-                    WorkflowScheduler.cancel(this@MainActivity)
-                    setStatus("Automation inactive", "Saved workflow will still run from Run.")
+                    setStatus("Automation inactive", "This workflow will not run automatically.")
                 }
             }
         }
-        top.addView(activeSwitch)
+        titleRow.addView(activeSwitch)
+        toolbar.addView(titleRow)
 
-        toolbar.addView(top)
-
-        val buttons = LinearLayout(this).apply {
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        val save = toolbarButton("Save")
-        val run = toolbarButton("Run")
-        val history = toolbarButton("History")
-        val more = toolbarButton("More")
-
-        save.setOnClickListener {
-            WorkflowJson.save(this, state)
-            if (state.active) WorkflowScheduler.schedule(this, state)
-            setStatus("Saved", "Workflow stored on this phone.")
-        }
-        run.setOnClickListener { runWorkflow() }
-        history.setOnClickListener { showHistory() }
-        more.setOnClickListener { showMoreMenu() }
-
-        buttons.addView(save)
-        buttons.addView(run)
-        buttons.addView(history)
-        buttons.addView(more)
-        toolbar.addView(buttons)
-
-        val paletteScroll = HorizontalScrollView(this).apply {
+        val actionRow = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = false
-            setPadding(0, dp(8), 0, 0)
         }
-        val palette = LinearLayout(this).apply {
+        val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
 
-        paletteItems.forEach { item ->
-            val b = Button(this).apply {
-                text = "+" + item.title
-                textSize = 11f
-                isAllCaps = false
-                setTextColor(Color.rgb(35, 40, 48))
-                background = rounded(Color.WHITE, 12f, Color.rgb(211, 216, 224), 1)
-                setPadding(dp(10), 0, dp(10), 0)
-                minHeight = dp(38)
-                minimumHeight = dp(38)
-                layoutParams = LinearLayout.LayoutParams(-2, dp(38)).apply {
-                    marginEnd = dp(6)
-                }
-                contentDescription = item.type + " — " + item.hint
-            }
-            b.setOnClickListener { addNode(item.type) }
-            palette.addView(b)
+        val add = toolbarButton("+ Add Node")
+        add.setOnClickListener { showNodeLibrary() }
+        val save = toolbarButton("Save")
+        save.setOnClickListener {
+            WorkflowStore.save(this, state)
+            syncAutomation()
+            setStatus("Saved", "Workflow stored on this device.")
+        }
+        val run = toolbarButton("Run")
+        run.setOnClickListener { runWorkflow() }
+        val history = toolbarButton("History")
+        history.setOnClickListener { showHistory() }
+        val more = toolbarButton("More")
+        more.setOnClickListener { showMoreMenu() }
+
+        actions.addView(add)
+        actions.addView(save)
+        actions.addView(run)
+        actions.addView(history)
+        actions.addView(more)
+
+        listOf(
+            "Manual Trigger",
+            "Schedule Trigger",
+            "HTTP Request",
+            "IF",
+            "AI Text",
+            "Notification"
+        ).forEach { type ->
+            val quick = toolbarButton("+ " + type.removeSuffix(" Trigger"))
+            quick.setOnClickListener { addNode(type) }
+            actions.addView(quick)
         }
 
-        paletteScroll.addView(palette)
-        toolbar.addView(paletteScroll)
-        root.addView(toolbar)
+        actionRow.addView(actions)
+        toolbar.addView(actionRow)
 
+        val canvasHost = FrameLikeScroll(this)
         canvas = WorkflowCanvas(this)
+        canvasHost.addView(canvas)
         root.addView(
-            canvas,
+            canvasHost,
             LinearLayout.LayoutParams(-1, 0, 1f).apply {
                 setMargins(dp(8), dp(8), dp(8), dp(8))
             }
@@ -193,59 +172,112 @@ class MainActivity : Activity() {
 
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(9), dp(12), dp(10))
+            setPadding(dp(11), dp(8), dp(11), dp(10))
             setBackgroundColor(Color.WHITE)
         }
 
         statusView = TextView(this).apply {
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(40, 44, 52))
+            setTextColor(Color.rgb(40, 44, 51))
         }
-
         logView = TextView(this).apply {
             textSize = 12f
-            setTextColor(Color.rgb(86, 92, 102))
+            setTextColor(Color.rgb(84, 90, 100))
             setPadding(0, dp(3), 0, 0)
             maxLines = 6
         }
 
         bottom.addView(statusView)
         bottom.addView(logView)
+
+        root.addView(toolbar)
         root.addView(bottom)
 
         setContentView(root)
     }
 
     private fun addNode(type: String) {
-        val id = nextId()
         val index = state.nodes.size
-        val x = dpF(24 + (index % 2) * 198)
-        val y = dpF(22 + (index / 2) * 120)
-        val title = defaultTitle(type)
-        val node = FlowNode(id, type, title, x, y)
+        val id = state.nodes.maxOfOrNull { it.id }?.plus(1) ?: 1
+        val node = FlowNode(
+            id = id,
+            type = type,
+            title = defaultTitle(type),
+            x = dpF(24 + (index % 2) * 205),
+            y = dpF(24 + (index / 2) * 124)
+        )
         node.ensureDefaultConfig()
         state.nodes.add(node)
         canvas.selectedId = id
+        WorkflowStore.save(this, state)
         canvas.invalidate()
-        WorkflowJson.save(this, state)
-        setStatus("Added " + title, "Tap to configure. Drag from a node's output dot to another node.")
+        setStatus("Added " + node.title, "Configure the node, then connect it to the next node.")
         showNodeEditor(node)
     }
 
-    private fun nextId(): Int = (state.nodes.maxOfOrNull { it.id } ?: 0) + 1
+    private fun defaultTitle(type: String): String = when (type) {
+        "Manual Trigger" -> "Manual start"
+        "Schedule Trigger" -> "Scheduled start"
+        "Webhook Trigger" -> "Webhook"
+        "Chat Trigger" -> "Chat webhook"
+        "Error Trigger" -> "Error trigger"
+        "HTTP Request" -> "HTTP request"
+        "Generic API" -> "Generic API"
+        "GraphQL" -> "GraphQL request"
+        "Edit Fields" -> "Set fields"
+        "Filter" -> "Filter data"
+        "IF" -> "Check condition"
+        "Switch" -> "Route by value"
+        "Merge" -> "Merge paths"
+        "Loop Over Items" -> "Loop items"
+        "Wait" -> "Wait"
+        "Limit" -> "Limit items"
+        "Remove Duplicates" -> "Remove duplicates"
+        "Rename Keys" -> "Rename keys"
+        "Sort" -> "Sort data"
+        "Split Out" -> "Split array"
+        "Summarize" -> "Summarize"
+        "JSON Parse" -> "Parse JSON"
+        "JSON Stringify" -> "Stringify JSON"
+        "Date & Time" -> "Date & time"
+        "Code" -> "Transform"
+        "Markdown" -> "Markdown"
+        "HTML" -> "HTML text"
+        "XML" -> "XML text"
+        "Crypto" -> "SHA-256"
+        "Read File", "Extract From File" -> "Read file"
+        "Write File", "Convert to File" -> "Write file"
+        "Set Variable" -> "Set variable"
+        "Log" -> "Execution log"
+        "Notification" -> "Notification"
+        "Open URL" -> "Open URL"
+        "Share Text" -> "Share text"
+        "AI Text" -> "AI text"
+        "AI Agent" -> "AI agent"
+        "Email" -> "Email via API"
+        "Telegram" -> "Telegram via API"
+        "Slack" -> "Slack via API"
+        "Google Sheets" -> "Google Sheets via API"
+        "Gmail" -> "Gmail via API"
+        "No Operation" -> "No operation"
+        "Stop / Error" -> "Stop / error"
+        else -> type
+    }
+
+    private fun nextId(): Int = state.nodes.maxOfOrNull { it.id }?.plus(1) ?: 1
 
     private fun starterWorkflow(): WorkflowState {
         val s = WorkflowState(name = "NATEN Starter")
         val trigger = FlowNode(1, "Manual Trigger", "Press Run", dpF(24), dpF(20))
-        val set = FlowNode(2, "Edit Fields", "Create message", dpF(24), dpF(132))
-        set.config.put("fields", "message=Hello from NATEN")
-        val notify = FlowNode(3, "Notification", "Show phone notification", dpF(24), dpF(244))
+        val edit = FlowNode(2, "Edit Fields", "Create message", dpF(24), dpF(144))
+        edit.config.put("fields", "message=Hello from NATEN")
+        val notify = FlowNode(3, "Notification", "Show notification", dpF(24), dpF(268))
         notify.config.put("title", "NATEN")
-        notify.config.put("message", "{{\$json.message}}")
-        val log = FlowNode(4, "Log", "Write execution log", dpF(24), dpF(356))
-        log.config.put("message", "{{\$json}}")
-        s.nodes.addAll(listOf(trigger, set, notify, log))
+        notify.config.put("message", "Hello from NATEN")
+        val log = FlowNode(4, "Log", "Write execution log", dpF(24), dpF(392))
+        log.config.put("message", "Starter workflow completed")
+        s.nodes.addAll(listOf(trigger, edit, notify, log))
         s.edges.addAll(
             listOf(
                 FlowEdge(1, 2),
@@ -256,50 +288,351 @@ class MainActivity : Activity() {
         return s
     }
 
-    private fun defaultTitle(type: String): String = when (type) {
-        "Manual Trigger" -> "When I press Run"
-        "Schedule Trigger" -> "Every 60 minutes"
-        "Webhook Trigger" -> "Receive HTTP"
-        "HTTP Request" -> "GET request"
-        "Edit Fields" -> "Set message"
-        "IF" -> "Check value"
-        "Switch" -> "Route by value"
-        "Wait" -> "Wait 2 seconds"
-        "AI Text" -> "Ask AI"
-        "Code" -> "Transform text"
-        "Notification" -> "Send notification"
-        "Open URL" -> "Open a page"
-        "Share Text" -> "Share text"
-        "Read File" -> "Read a file"
-        "Write File" -> "Write a file"
-        "Set Variable" -> "Set a variable"
-        "Log" -> "Write to log"
-        "Stop / Error" -> "Stop workflow"
-        "Merge" -> "Join paths"
-        else -> type
+    private fun showNodeLibrary() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+        }
+
+        val search = EditText(this).apply {
+            hint = "Search nodes…"
+            textSize = 14f
+            singleLine = true
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = rounded(Color.WHITE, 10f, Color.rgb(208, 213, 221), 1)
+        }
+        box.addView(search)
+
+        val category = Spinner(this)
+        category.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            NodeCatalog.categories()
+        )
+        box.addView(category)
+
+        val list = ListView(this)
+        box.addView(list, LinearLayout.LayoutParams(-1, dp(420)))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Node Library")
+            .setView(box)
+            .setNegativeButton("Close", null)
+            .create()
+
+        fun refresh() {
+            val defs = NodeCatalog.search(
+                search.text.toString(),
+                category.selectedItem?.toString() ?: "All"
+            )
+            val labels = defs.map { it.type + "  •  " + it.category + "\n" + it.description }
+            list.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_list_item_2,
+                android.R.id.text1,
+                labels
+            )
+            list.setOnItemClickListener { _, _, position, _ ->
+                addNode(defs[position].type)
+                dialog.dismiss()
+            }
+        }
+
+        search.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = refresh()
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        category.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                refresh()
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+        }
+
+        refresh()
+        dialog.show()
     }
 
-    private fun renameWorkflow() {
-        val field = editField("Workflow name", state.name)
+    private fun showNodeEditor(node: FlowNode) {
+        node.ensureDefaultConfig()
+
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(2), dp(4), dp(2))
+        }
+
+        val title = EditText(this).apply {
+            hint = "Node name"
+            setText(node.title)
+            textSize = 14f
+        }
+        form.addView(title)
+
+        fun label(value: String) {
+            form.addView(TextView(this).apply {
+                text = value
+                textSize = 12f
+                setTextColor(Color.rgb(92, 98, 108))
+                setPadding(0, dp(8), 0, dp(2))
+            })
+        }
+
+        fun textField(key: String, hint: String = key, multi: Boolean = false): EditText {
+            label(hint)
+            val e = EditText(this).apply {
+                setText(node.config.optString(key, ""))
+                textSize = 14f
+                setPadding(dp(10), dp(7), dp(10), dp(7))
+                background = rounded(Color.WHITE, 10f, Color.rgb(209, 214, 222), 1)
+                if (!multi) setSingleLine(true)
+                else {
+                    minLines = 4
+                    gravity = Gravity.TOP
+                    inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                }
+            }
+            form.addView(e)
+            return e
+        }
+
+        fun spinner(key: String, hint: String, options: List<String>): Spinner {
+            label(hint)
+            val s = Spinner(this)
+            s.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_spinner_dropdown_item,
+                options
+            )
+            val current = node.config.optString(key)
+            s.setSelection(options.indexOf(current).coerceAtLeast(0))
+            form.addView(s)
+            return s
+        }
+
+        val fields = linkedMapOf<String, EditText>()
+        val spinners = linkedMapOf<String, Spinner>()
+
+        when (node.type) {
+            "Schedule Trigger" -> {
+                fields["interval"] = textField("interval", "Interval")
+                fields["interval"]?.inputType = InputType.TYPE_CLASS_NUMBER
+                spinners["unit"] = spinner("unit", "Unit", listOf("seconds", "minutes", "hours", "days"))
+                label("Background schedules use Android alarms and may be deferred slightly by the OS.")
+            }
+
+            "Webhook Trigger", "Chat Trigger" -> {
+                spinners["method"] = spinner("method", "HTTP method", listOf("POST", "GET", "ANY"))
+                fields["path"] = textField("path", "Path, e.g. hook/my-workflow")
+                label("Webhook listener: http://PHONE_IP:8787/<path>")
+            }
+
+            "HTTP Request", "Generic API", "Email", "Telegram", "Slack", "Google Sheets", "Gmail" -> {
+                spinners["method"] = spinner("method", "Method", listOf("GET", "POST", "PUT", "PATCH", "DELETE"))
+                fields["url"] = textField("url", "URL")
+                fields["headers"] = textField("headers", "Headers (one per line: Key: Value)", true)
+                fields["body"] = textField("body", "Body", true)
+            }
+
+            "GraphQL" -> {
+                fields["url"] = textField("url", "GraphQL URL")
+                fields["headers"] = textField("headers", "Headers", true)
+                fields["query"] = textField("query", "Query", true)
+                fields["variables"] = textField("variables", "Variables JSON", true)
+            }
+
+            "Edit Fields" -> fields["fields"] = textField(
+                "fields",
+                "Fields (one per line: key=value)",
+                true
+            )
+
+            "IF", "Filter" -> {
+                fields["field"] = textField("field", "JSON field/path")
+                spinners["operator"] = spinner(
+                    "operator",
+                    "Operator",
+                    listOf(
+                        "equals", "not equals", "contains",
+                        "starts with", "ends with",
+                        "greater than", "less than", "exists", "not exists"
+                    )
+                )
+                fields["value"] = textField("value", "Compare with")
+            }
+
+            "Switch" -> {
+                fields["field"] = textField("field", "JSON field/path")
+                fields["cases"] = textField("cases", "Cases (one per line)", true)
+                label("Connect each Switch output and select a route.")
+            }
+
+            "Wait" -> {
+                fields["seconds"] = textField("seconds", "Seconds")
+                fields["seconds"]?.inputType = InputType.TYPE_CLASS_NUMBER
+            }
+
+            "Limit" -> {
+                fields["count"] = textField("count", "Maximum items")
+                fields["count"]?.inputType = InputType.TYPE_CLASS_NUMBER
+            }
+
+            "Remove Duplicates" -> fields["field"] = textField("field", "Duplicate key")
+            "Rename Keys" -> fields["mapping"] = textField("mapping", "Mapping old=new", true)
+            "Sort" -> {
+                fields["field"] = textField("field", "Sort field")
+                spinners["descending"] = spinner("descending", "Order", listOf("false", "true"))
+            }
+            "Split Out" -> fields["field"] = textField("field", "Array field")
+            "Summarize" -> {
+                fields["field"] = textField("field", "Field")
+                spinners["operation"] = spinner("operation", "Operation", listOf("count", "sum", "average"))
+            }
+            "JSON Parse", "JSON Stringify", "Date & Time", "Markdown", "HTML", "XML", "Crypto" ->
+                fields["field"] = textField("field", "Field")
+            "Date & Time" -> fields["format"] = textField("format", "Format")
+            "Code" -> {
+                spinners["operation"] = spinner(
+                    "operation",
+                    "Transform",
+                    listOf("uppercase", "lowercase", "length", "reverse", "trim", "set value")
+                )
+                fields["field"] = textField("field", "Input field")
+                fields["outputField"] = textField("outputField", "Output field")
+                fields["value"] = textField("value", "Value for set value")
+            }
+            "Read File", "Extract From File" -> fields["filename"] = textField("filename", "Filename")
+            "Write File", "Convert to File" -> {
+                fields["filename"] = textField("filename", "Filename")
+                fields["data"] = textField("data", "Data", true)
+            }
+            "Set Variable" -> {
+                fields["key"] = textField("key", "Variable name")
+                fields["value"] = textField("value", "Variable value", true)
+            }
+            "Notification" -> {
+                fields["title"] = textField("title", "Title")
+                fields["message"] = textField("message", "Message", true)
+            }
+            "Open URL" -> fields["url"] = textField("url", "URL")
+            "Share Text" -> fields["text"] = textField("text", "Text", true)
+            "AI Text", "AI Agent" -> {
+                spinners["provider"] = spinner("provider", "Provider", listOf("OpenAI-compatible", "Gemini"))
+                fields["endpoint"] = textField("endpoint", "Endpoint")
+                fields["apiKey"] = textField("apiKey", "API key")
+                fields["model"] = textField("model", "Model")
+                fields["prompt"] = textField("prompt", "Prompt", true)
+                fields["temperature"] = textField("temperature", "Temperature")
+            }
+            "Log", "Stop / Error" -> fields["message"] = textField("message", "Message", true)
+            else -> {
+                label("Advanced configuration JSON")
+                fields["__json"] = textField("__json", "JSON", true).also {
+                    it.setText(node.config.toString(2))
+                }
+            }
+        }
+
+        label("Connections are made by dragging the output dot on the right of this node to another node's input dot.")
+
+        val scroll = ScrollView(this).apply {
+            addView(form)
+        }
+
         AlertDialog.Builder(this)
-            .setTitle("Workflow name")
-            .setView(field)
+            .setTitle(node.type)
+            .setView(scroll)
             .setNegativeButton("Cancel", null)
+            .setNeutralButton("Delete") { _, _ -> deleteNode(node) }
             .setPositiveButton("Save") { _, _ ->
-                state.name = field.text.toString().trim().ifBlank { "My Workflow" }
-                nameView.text = state.name
-                WorkflowJson.save(this, state)
+                node.title = title.text.toString().trim().ifBlank { defaultTitle(node.type) }
+
+                if (fields.containsKey("__json")) {
+                    runCatching {
+                        node.config = JSONObject(fields["__json"]!!.text.toString())
+                    }.onFailure {
+                        Toast.makeText(this, "Invalid JSON: " + it.message, Toast.LENGTH_LONG).show()
+                    }
+                } else {
+                    fields.forEach { pair -> node.config.put(pair.key, pair.value.text.toString()) }
+                    spinners.forEach { pair ->
+                        node.config.put(pair.key, pair.value.selectedItem.toString())
+                    }
+                }
+
+                node.ensureDefaultConfig()
+                WorkflowStore.save(this, state)
+                syncAutomation()
+                canvas.invalidate()
+                setStatus("Saved node", node.title)
             }
             .show()
     }
 
+    private fun deleteNode(node: FlowNode) {
+        state.nodes.removeAll { it.id == node.id }
+        state.edges.removeAll { it.from == node.id || it.to == node.id }
+        WorkflowStore.save(this, state)
+        canvas.selectedId = null
+        canvas.invalidate()
+        syncAutomation()
+        setStatus("Node deleted", "Connections to this node were removed.")
+    }
+
+    private fun connectNodes(from: FlowNode, to: FlowNode) {
+        if (from.id == to.id) return
+
+        fun save(branch: String) {
+            if (state.edges.none { it.from == from.id && it.to == to.id && it.branch == branch }) {
+                state.edges.add(FlowEdge(from.id, to.id, branch))
+            }
+            WorkflowStore.save(this, state)
+            canvas.invalidate()
+            setStatus(
+                "Connected",
+                from.title + " → " + to.title +
+                    if (branch.isBlank()) "" else " [" + branch + "]"
+            )
+        }
+
+        when (from.type) {
+            "IF", "Filter" -> AlertDialog.Builder(this)
+                .setTitle("Choose branch")
+                .setSingleChoiceItems(arrayOf("true", "false"), 0) { dialog, which ->
+                    save(if (which == 0) "true" else "false")
+                    dialog.dismiss()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+
+            "Switch" -> {
+                val routes = from.config.optString("cases")
+                    .lines()
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .toMutableList()
+                routes.add("default")
+
+                AlertDialog.Builder(this)
+                    .setTitle("Choose route")
+                    .setItems(routes.toTypedArray()) { _, which ->
+                        save(routes[which])
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+            }
+
+            else -> save("")
+        }
+    }
+
     private fun runWorkflow() {
         if (state.nodes.isEmpty()) {
-            setStatus("Nothing to run", "Add a trigger and at least one action.")
+            setStatus("Nothing to run", "Add a trigger node.")
             return
         }
 
-        WorkflowJson.save(this, state)
+        WorkflowStore.save(this, state)
         logLines.clear()
         logView.text = "Starting execution…"
         statusView.text = "Running…"
@@ -331,290 +664,100 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun showNodeEditor(node: FlowNode) {
-        node.ensureDefaultConfig()
-        val form = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(2), dp(4), dp(2))
+    private fun syncAutomation() {
+        WorkflowScheduler.rescheduleAll(this)
+
+        val anyWebhook = WorkflowStore.list(this).any { workflow ->
+            workflow.active && workflow.nodes.any {
+                it.type == "Webhook Trigger" || it.type == "Chat Trigger"
+            }
         }
 
-        val titleField = editField("Node name", node.title)
-        form.addView(titleField)
+        if (anyWebhook) {
+            WorkflowScheduler.startAlwaysOnService(this)
+        } else {
+            stopService(Intent(this, AutomationService::class.java))
+        }
+    }
 
-        var methodSpinner: Spinner? = null
-        var providerSpinner: Spinner? = null
-        var unitSpinner: Spinner? = null
-        var operatorSpinner: Spinner? = null
-        var operationSpinner: Spinner? = null
-
-        fun addLabel(text: String) {
-            form.addView(TextView(this).apply {
-                this.text = text
-                textSize = 12f
-                setTextColor(Color.rgb(96, 102, 112))
-                setPadding(0, dp(9), 0, dp(3))
-            })
+    private fun showWorkflows() {
+        val workflows = WorkflowStore.list(this)
+        if (workflows.isEmpty()) {
+            val created = WorkflowStore.newWorkflow(this, "My Workflow")
+            state = created
+            refreshUi()
+            return
         }
 
-        fun addText(label: String, key: String, multi: Boolean = false, password: Boolean = false): EditText {
-            addLabel(label)
-            val e = editField(label, node.config.optString(key, ""))
-            if (multi) {
-                e.minLines = 4
-                e.gravity = Gravity.TOP
-                e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            }
-            if (password) {
-                e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            }
-            form.addView(e)
-            e.setTag(key)
-            return e
-        }
-
-        fun addSpinner(label: String, key: String, options: List<String>): Spinner {
-            addLabel(label)
-            val s = Spinner(this)
-            s.adapter = ArrayAdapter(
-                this,
-                android.R.layout.simple_spinner_dropdown_item,
-                options
-            )
-            val current = node.config.optString(key)
-            val index = options.indexOf(current).coerceAtLeast(0)
-            s.setSelection(index)
-            form.addView(s)
-            return s
-        }
-
-        val extraFields = mutableListOf<Pair<String, EditText>>()
-
-        when (node.type) {
-            "Manual Trigger", "Webhook Trigger" -> {
-                addLabel(if (node.type == "Webhook Trigger") {
-                    "This trigger is prepared for a local HTTP webhook workflow."
-                } else {
-                    "This trigger starts when Run is pressed, or when another node targets it."
-                })
-            }
-
-            "Schedule Trigger" -> {
-                val i = addText("Interval", "interval")
-                i.inputType = InputType.TYPE_CLASS_NUMBER
-                unitSpinner = addSpinner(
-                    "Unit",
-                    "unit",
-                    listOf("seconds", "minutes", "hours", "days")
-                )
-                addLabel("Android may throttle very short background intervals.")
-            }
-
-            "HTTP Request" -> {
-                methodSpinner = addSpinner("Method", "method", listOf("GET", "POST", "PUT", "PATCH", "DELETE"))
-                extraFields.add("url" to addText("URL", "url"))
-                extraFields.add("headers" to addText("Headers", "headers", multi = true))
-                extraFields.add("body" to addText("Body", "body", multi = true))
-            }
-
-            "Edit Fields" -> {
-                extraFields.add(
-                    "fields" to addText(
-                        "Fields (one per line: key=value)",
-                        "fields",
-                        multi = true
-                    )
-                )
-                addLabel("Use {{\$json.field}}, {{\$vars.name}} and {{\$now}} in values.")
-            }
-
-            "IF" -> {
-                extraFields.add("field" to addText("Field / JSON path", "field"))
-                operatorSpinner = addSpinner(
-                    "Operator",
-                    "operator",
-                    listOf(
-                        "equals",
-                        "not equals",
-                        "contains",
-                        "starts with",
-                        "ends with",
-                        "greater than",
-                        "less than",
-                        "exists",
-                        "not exists"
-                    )
-                )
-                extraFields.add("value" to addText("Compare with", "value"))
-                addLabel("Outputs split into TRUE and FALSE. Connect each branch separately.")
-            }
-
-            "Switch" -> {
-                extraFields.add("field" to addText("Field / JSON path", "field"))
-                extraFields.add(
-                    "cases" to addText(
-                        "Cases (one per line)",
-                        "cases",
-                        multi = true
-                    )
-                )
-                addLabel("When you connect from Switch, choose the case label for that connection.")
-            }
-
-            "Wait" -> {
-                val s = addText("Seconds", "seconds")
-                s.inputType = InputType.TYPE_CLASS_NUMBER
-            }
-
-            "AI Text" -> {
-                providerSpinner = addSpinner(
-                    "Provider",
-                    "provider",
-                    listOf("OpenAI-compatible", "Gemini")
-                )
-                extraFields.add("endpoint" to addText("Endpoint", "endpoint"))
-                extraFields.add("apiKey" to addText("API key", "apiKey", password = true))
-                extraFields.add("model" to addText("Model", "model"))
-                extraFields.add("prompt" to addText("Prompt", "prompt", multi = true))
-                extraFields.add("temperature" to addText("Temperature", "temperature"))
-                addLabel("AI calls are direct from the phone. The key is stored locally in this workflow.")
-            }
-
-            "Code" -> {
-                operationSpinner = addSpinner(
-                    "Safe transform",
-                    "operation",
-                    listOf("uppercase", "lowercase", "length", "reverse", "trim", "set value")
-                )
-                extraFields.add("field" to addText("Input field", "field"))
-                extraFields.add("outputField" to addText("Output field", "outputField"))
-                extraFields.add("value" to addText("Value (for set value)", "value"))
-            }
-
-            "Notification" -> {
-                extraFields.add("title" to addText("Title", "title"))
-                extraFields.add("message" to addText("Message", "message", multi = true))
-            }
-
-            "Open URL" -> extraFields.add("url" to addText("URL", "url"))
-            "Share Text" -> extraFields.add("text" to addText("Text", "text", multi = true))
-            "Read File" -> extraFields.add("filename" to addText("Filename in NATEN storage", "filename"))
-            "Write File" -> {
-                extraFields.add("filename" to addText("Filename in NATEN storage", "filename"))
-                extraFields.add("data" to addText("Data to write", "data", multi = true))
-            }
-            "Set Variable" -> {
-                extraFields.add("key" to addText("Variable name", "key"))
-                extraFields.add("value" to addText("Variable value", "value", multi = true))
-            }
-            "Log" -> extraFields.add("message" to addText("Message", "message", multi = true))
-            "Stop / Error" -> extraFields.add("message" to addText("Stop / error message", "message", multi = true))
-            "Merge" -> addLabel("Merge joins incoming paths at this node.")
-        }
-
-        val scroll = ScrollView(this).apply {
-            addView(form)
+        val labels = workflows.map {
+            val active = if (it.active) " • ACTIVE" else ""
+            it.name + active + "\n" +
+                it.nodes.size + " nodes • " + it.edges.size + " connections"
         }
 
         AlertDialog.Builder(this)
-            .setTitle(node.type)
-            .setView(scroll)
-            .setNegativeButton("Cancel", null)
-            .setNeutralButton("Delete") { _, _ ->
-                deleteNode(node)
+            .setTitle("Workflows")
+            .setItems(labels.toTypedArray()) { _, which ->
+                switchWorkflow(workflows[which].id)
             }
-            .setPositiveButton("Save") { _, _ ->
-                node.title = titleField.text.toString().trim().ifBlank { defaultTitle(node.type) }
-
-                extraFields.forEach { pair ->
-                    node.config.put(pair.first, pair.second.text.toString())
-                }
-                methodSpinner?.let {
-                    node.config.put("method", it.selectedItem.toString())
-                }
-                providerSpinner?.let {
-                    node.config.put("provider", it.selectedItem.toString())
-                }
-                unitSpinner?.let {
-                    node.config.put("unit", it.selectedItem.toString())
-                }
-                operatorSpinner?.let {
-                    node.config.put("operator", it.selectedItem.toString())
-                }
-                operationSpinner?.let {
-                    node.config.put("operation", it.selectedItem.toString())
-                }
-
-                WorkflowJson.save(this, state)
-                if (state.active) WorkflowScheduler.schedule(this, state)
-                canvas.invalidate()
-                setStatus("Updated " + node.title, "Changes saved to this device.")
+            .setNegativeButton("Delete current") { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle("Delete " + state.name + "?")
+                    .setMessage("This cannot be undone.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete") { _, _ ->
+                        val deleting = state.id
+                        WorkflowScheduler.cancel(this, deleting)
+                        WorkflowStore.delete(this, deleting)
+                        state = WorkflowStore.loadCurrent(this)
+                            ?: WorkflowStore.newWorkflow(this, "My Workflow")
+                        refreshUi()
+                        syncAutomation()
+                    }
+                    .show()
+            }
+            .setNeutralButton("Duplicate current") { _, _ ->
+                state = WorkflowStore.duplicate(this, state)
+                refreshUi()
+                syncAutomation()
+            }
+            .setPositiveButton("New workflow") { _, _ ->
+                state = WorkflowStore.newWorkflow(this, "My Workflow")
+                refreshUi()
+                syncAutomation()
             }
             .show()
     }
 
-    private fun deleteNode(node: FlowNode) {
-        state.nodes.removeAll { it.id == node.id }
-        state.edges.removeAll { it.from == node.id || it.to == node.id }
-        if (state.nodes.none { it.type == "Schedule Trigger" }) {
-            WorkflowScheduler.cancel(this)
-        }
-        WorkflowJson.save(this, state)
-        canvas.selectedId = null
-        canvas.invalidate()
-        setStatus("Node deleted", "Connections to the node were removed.")
+    private fun switchWorkflow(id: String) {
+        val next = WorkflowStore.load(this, id) ?: return
+        state = next
+        WorkflowStore.setCurrent(this, next.id)
+        refreshUi()
+        syncAutomation()
+        setStatus("Opened workflow", next.name)
     }
 
-    private fun connectNodes(from: FlowNode, to: FlowNode) {
-        if (from.id == to.id) return
-
-        fun saveEdge(branch: String) {
-            state.edges.removeAll { it.from == from.id && it.to == to.id && it.branch == branch }
-            state.edges.add(FlowEdge(from.id, to.id, branch))
-            WorkflowJson.save(this, state)
-            canvas.invalidate()
-            setStatus("Connected", from.title + " → " + to.title + if (branch.isNotBlank()) " [" + branch + "]" else "")
+    private fun renameWorkflow() {
+        val input = EditText(this).apply {
+            setText(state.name)
+            selectAll()
         }
 
-        when (from.type) {
-            "IF" -> AlertDialog.Builder(this)
-                .setTitle("Choose branch")
-                .setSingleChoiceItems(arrayOf("true", "false"), 0) { dialog, which ->
-                    saveEdge(if (which == 0) "true" else "false")
-                    dialog.dismiss()
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-
-            "Switch" -> {
-                from.ensureDefaultConfig()
-                val values = from.config.optString("cases")
-                    .lines()
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .toMutableList()
-                values.add("default")
-                AlertDialog.Builder(this)
-                    .setTitle("Choose route")
-                    .setItems(values.toTypedArray()) { _, which ->
-                        saveEdge(values[which])
-                    }
-                    .setNegativeButton("Cancel", null)
-                    .show()
+        AlertDialog.Builder(this)
+            .setTitle("Workflow name")
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                state.name = input.text.toString().trim().ifBlank { "My Workflow" }
+                WorkflowStore.save(this, state)
+                refreshUi()
             }
-
-            else -> saveEdge("")
-        }
-    }
-
-    private fun setStatus(status: String, detail: String) {
-        statusView.text = status
-        logLines.add(detail)
-        while (logLines.size > 7) logLines.removeAt(0)
-        logView.text = logLines.joinToString("\n")
+            .show()
     }
 
     private fun showHistory() {
-        val arr = WorkflowJson.history(this)
+        val arr = WorkflowStore.history(this)
         if (arr.length() == 0) {
             AlertDialog.Builder(this)
                 .setTitle("Execution history")
@@ -624,26 +767,22 @@ class MainActivity : Activity() {
             return
         }
 
-        val lines = ArrayList<String>()
+        val lines = mutableListOf<String>()
         for (i in arr.length() - 1 downTo 0) {
-            val o = arr.getJSONObject(i)
-            val mark = if (o.optBoolean("success")) "OK" else "FAIL"
+            val o = arr.optJSONObject(i) ?: continue
             lines.add(
-                mark + "  " +
-                    o.optString("workflow") +
-                    "\\n" +
-                    o.optString("message") +
-                    "  •  " +
-                    o.optLong("durationMs") +
-                    " ms"
+                (if (o.optBoolean("success")) "OK" else "FAIL") +
+                    " • " + o.optString("workflow") +
+                    "\n" + o.optString("message") +
+                    "\n" + o.optLong("durationMs") + " ms"
             )
         }
 
         val text = TextView(this).apply {
-            setTextColor(Color.rgb(48, 54, 62))
             textSize = 13f
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            this.text = lines.take(30).joinToString("\\n\\n")
+            setTextColor(Color.rgb(45, 50, 58))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            text = lines.take(50).joinToString("\n\n")
         }
 
         AlertDialog.Builder(this)
@@ -653,54 +792,82 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun showAutomationStatus() {
+        val active = WorkflowStore.list(this).filter { it.active }
+        val webhook = active.any { workflow ->
+            workflow.nodes.any { it.type == "Webhook Trigger" || it.type == "Chat Trigger" }
+        }
+
+        val message = buildString {
+            append("Active workflows: ").append(active.size).append("\n\n")
+            active.forEach {
+                append("• ").append(it.name).append(" — ")
+                append(it.nodes.size).append(" nodes\n")
+            }
+            append("\nSchedule alarms: configured per active Schedule Trigger.")
+            append("\nWebhook listener: ")
+            append(if (webhook) "ON" else "OFF")
+            if (webhook) {
+                append("\nLocal webhook port: 8787")
+                append("\nUse http://PHONE_IP:8787/<your-path>")
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Automation status")
+            .setMessage(message)
+            .setPositiveButton("Resync", { _, _ ->
+                syncAutomation()
+                Toast.makeText(this, "Automation resynced", Toast.LENGTH_SHORT).show()
+            })
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
     private fun showMoreMenu() {
         val items = arrayOf(
-            "New workflow",
+            "Node Library",
+            "Automation status",
             "Import workflow JSON",
-            "Export workflow JSON",
+            "Export NATEN JSON",
             "Export n8n-style JSON",
+            "New workflow",
             "Help"
         )
 
         AlertDialog.Builder(this)
-            .setTitle("Workflow")
+            .setTitle("NATEN")
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> newWorkflow()
-                    1 -> importJson()
-                    2 -> exportJson(false)
-                    3 -> exportJson(true)
-                    4 -> showHelp()
+                    0 -> showNodeLibrary()
+                    1 -> showAutomationStatus()
+                    2 -> importJson()
+                    3 -> exportJson(false)
+                    4 -> exportJson(true)
+                    5 -> {
+                        state = WorkflowStore.newWorkflow(this, "My Workflow")
+                        refreshUi()
+                        syncAutomation()
+                    }
+                    6 -> showHelp()
                 }
             }
             .show()
     }
 
-    private fun newWorkflow() {
-        AlertDialog.Builder(this)
-            .setTitle("New workflow")
-            .setMessage("Clear the current workflow and start from an empty canvas?")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clear") { _, _ ->
-                WorkflowScheduler.cancel(this)
-                state = WorkflowState()
-                logLines.clear()
-                nameView.text = state.name
-                activeSwitch.isChecked = false
-                canvas.invalidate()
-                WorkflowJson.save(this, state)
-                setStatus("New workflow", "Canvas cleared.")
-            }
-            .show()
-    }
-
     private fun exportJson(n8nStyle: Boolean) {
-        val content = if (n8nStyle) toN8nJson().toString(2) else WorkflowJson.toJson(state).toString(2)
+        val content = if (n8nStyle) n8nJson().toString(2)
+        else WorkflowJson.toJson(state).toString(2)
+
+        pendingExport = content
+
         val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             type = "application/json"
-            putExtra(Intent.EXTRA_TITLE, state.name.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".json")
+            putExtra(
+                Intent.EXTRA_TITLE,
+                state.name.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".json"
+            )
         }
-        pendingExport = content
         startActivityForResult(intent, REQ_EXPORT)
     }
 
@@ -719,78 +886,71 @@ class MainActivity : Activity() {
         if (resultCode != RESULT_OK || data?.data == null) return
 
         val uri = data.data!!
+
         if (requestCode == REQ_EXPORT) {
             val value = pendingExport ?: return
-            contentResolver.openOutputStream(uri)?.use { os ->
-                OutputStreamWriter(os, Charsets.UTF_8).use { it.write(value) }
+            contentResolver.openOutputStream(uri)?.use { output ->
+                OutputStreamWriter(output, Charsets.UTF_8).use { writer -> writer.write(value) }
             }
             setStatus("Exported", "Workflow JSON written.")
-        } else if (requestCode == REQ_IMPORT) {
+            return
+        }
+
+        if (requestCode == REQ_IMPORT) {
             val raw = contentResolver.openInputStream(uri)?.use { input ->
                 BufferedReader(InputStreamReader(input, Charsets.UTF_8)).readText()
             } ?: return
 
             runCatching {
                 val root = JSONObject(raw)
-                state = if (root.optString("format") == "naten-v1") {
+                state = if (root.optString("format").startsWith("naten")) {
                     WorkflowJson.fromJson(root)
                 } else {
                     importN8nJson(root)
                 }
-                state.nodes.forEach { it.ensureDefaultConfig() }
-                WorkflowJson.save(this, state)
-                if (state.active) WorkflowScheduler.schedule(this, state) else WorkflowScheduler.cancel(this)
-                nameView.text = state.name
-                activeSwitch.setOnCheckedChangeListener(null)
-                activeSwitch.isChecked = state.active
-                activeSwitch.setOnCheckedChangeListener { _, checked ->
-                    state.active = checked
-                    WorkflowJson.save(this, state)
-                    if (checked) WorkflowScheduler.schedule(this, state) else WorkflowScheduler.cancel(this)
-                }
-                canvas.invalidate()
-                setStatus("Imported", "Loaded " + state.nodes.size + " node(s).")
+                WorkflowStore.save(this, state)
+                refreshUi()
+                syncAutomation()
+                setStatus("Imported", state.name)
             }.onFailure {
                 setStatus("Import failed", it.message ?: "Invalid JSON")
             }
         }
     }
 
-    private fun toN8nJson(): JSONObject {
-        val root = JSONObject()
-            .put("name", state.name)
-            .put("active", state.active)
-            .put("settings", JSONObject())
-            .put("connections", JSONObject())
+    private fun n8nJson(): JSONObject {
+        val root = JSONObject().apply {
+            put("name", state.name)
+            put("active", state.active)
+            put("settings", JSONObject())
+        }
 
         val nodes = JSONArray()
-        state.nodes.forEach { n ->
-            n.ensureDefaultConfig()
+        state.nodes.forEach { node ->
+            node.ensureDefaultConfig()
             nodes.put(
-                JSONObject()
-                    .put("id", n.id.toString())
-                    .put("name", n.title)
-                    .put("type", n8nType(n.type))
-                    .put("typeVersion", 1)
-                    .put("position", JSONArray().put(n.x).put(n.y))
-                    .put("parameters", JSONObject(n.config.toString()))
+                JSONObject().apply {
+                    put("id", node.id.toString())
+                    put("name", node.title)
+                    put("type", n8nType(node.type))
+                    put("typeVersion", 1)
+                    put("position", JSONArray().put(node.x).put(node.y))
+                    put("parameters", JSONObject(node.config.toString()))
+                }
             )
         }
         root.put("nodes", nodes)
 
         val connections = JSONObject()
-        state.edges.forEach { e ->
-            val from = state.nodes.firstOrNull { it.id == e.from } ?: return@forEach
-            val to = state.nodes.firstOrNull { it.id == e.to } ?: return@forEach
+        state.edges.forEach { edge ->
+            val from = state.nodes.firstOrNull { it.id == edge.from } ?: return@forEach
+            val to = state.nodes.firstOrNull { it.id == edge.to } ?: return@forEach
 
-            val branchIndex = when {
-                from.type == "IF" && e.branch.equals("false", true) -> 1
-                else -> 0
-            }
-
-            val fromConnections = connections.optJSONObject(from.title) ?: JSONObject()
-            val main = fromConnections.optJSONArray("main") ?: JSONArray()
+            val source = connections.optJSONObject(from.title) ?: JSONObject()
+            val main = source.optJSONArray("main") ?: JSONArray()
+            val branchIndex = if (from.type == "IF" && edge.branch.equals("false", true)) 1 else 0
             while (main.length() <= branchIndex) main.put(JSONArray())
+
             val line = main.optJSONArray(branchIndex) ?: JSONArray()
             line.put(
                 JSONObject()
@@ -799,8 +959,8 @@ class MainActivity : Activity() {
                     .put("index", 0)
             )
             main.put(branchIndex, line)
-            fromConnections.put("main", main)
-            connections.put(from.title, fromConnections)
+            source.put("main", main)
+            connections.put(from.title, source)
         }
 
         root.put("connections", connections)
@@ -821,98 +981,144 @@ class MainActivity : Activity() {
     }
 
     private fun importN8nJson(root: JSONObject): WorkflowState {
-        val out = WorkflowState(
-            name = root.optString("name", "Imported Workflow"),
+        val imported = WorkflowState(
+            name = root.optString("name", "Imported workflow"),
             active = root.optBoolean("active", false)
         )
+
         val nodes = root.optJSONArray("nodes") ?: JSONArray()
-        val names = mutableMapOf<String, Int>()
+        val nameToId = mutableMapOf<String, Int>()
 
         for (i in 0 until nodes.length()) {
-            val o = nodes.getJSONObject(i)
+            val o = nodes.optJSONObject(i) ?: continue
             val id = o.optString("id").toIntOrNull() ?: i + 1
             val mapped = mapN8nType(o.optString("type"))
-            val position = o.optJSONArray("position") ?: JSONArray()
+            val pos = o.optJSONArray("position") ?: JSONArray()
             val cfg = o.optJSONObject("parameters") ?: JSONObject()
+
             val node = FlowNode(
                 id = id,
                 type = mapped,
                 title = o.optString("name", mapped),
-                x = position.optDouble(0, 24.0).toFloat(),
-                y = position.optDouble(1, 24.0).toFloat(),
+                x = pos.optDouble(0, 24.0).toFloat(),
+                y = pos.optDouble(1, 24.0).toFloat(),
                 config = JSONObject(cfg.toString())
             )
             node.ensureDefaultConfig()
-            out.nodes.add(node)
-            names[node.title] = node.id
+            imported.nodes.add(node)
+            nameToId[node.title] = node.id
         }
 
-        val connections = root.optJSONObject("connections") ?: JSONObject()
-        val keys = connections.keys()
+        val connectionRoot = root.optJSONObject("connections") ?: JSONObject()
+        val keys = connectionRoot.keys()
         while (keys.hasNext()) {
             val sourceName = keys.next()
-            val sourceId = names[sourceName] ?: continue
-            val sourceObj = connections.optJSONObject(sourceName) ?: continue
-            val main = sourceObj.optJSONArray("main") ?: continue
+            val sourceId = nameToId[sourceName] ?: continue
+            val source = connectionRoot.optJSONObject(sourceName) ?: continue
+            val main = source.optJSONArray("main") ?: continue
 
             for (branch in 0 until main.length()) {
                 val line = main.optJSONArray(branch) ?: continue
                 for (i in 0 until line.length()) {
                     val targetName = line.optJSONObject(i)?.optString("node") ?: continue
-                    val targetId = names[targetName] ?: continue
-                    val branchLabel = if (out.nodes.firstOrNull { it.id == sourceId }?.type == "IF") {
+                    val targetId = nameToId[targetName] ?: continue
+                    val sourceNode = imported.nodes.firstOrNull { it.id == sourceId }
+                    val branchName = if (sourceNode?.type == "IF") {
                         if (branch == 1) "false" else "true"
                     } else ""
-                    out.edges.add(FlowEdge(sourceId, targetId, branchLabel))
+                    imported.edges.add(FlowEdge(sourceId, targetId, branchName))
                 }
             }
         }
 
-        return out
+        return imported
     }
 
-    private fun mapN8nType(value: String): String {
-        val t = value.lowercase(Locale.US)
+    private fun mapN8nType(type: String): String {
+        val value = type.lowercase(Locale.US)
         return when {
-            "manualtrigger" in t -> "Manual Trigger"
-            "scheduletrigger" in t -> "Schedule Trigger"
-            "webhook" in t -> "Webhook Trigger"
-            "httprequest" in t -> "HTTP Request"
-            ".set" in t || "editfields" in t -> "Edit Fields"
-            ".if" in t -> "IF"
-            ".switch" in t -> "Switch"
-            ".wait" in t -> "Wait"
-            ".code" in t -> "Code"
-            else -> "Log"
+            "manualtrigger" in value -> "Manual Trigger"
+            "scheduletrigger" in value -> "Schedule Trigger"
+            "webhook" in value -> "Webhook Trigger"
+            "httprequest" in value -> "HTTP Request"
+            "graphq" in value -> "GraphQL"
+            ".set" in value || "editfields" in value -> "Edit Fields"
+            ".if" in value -> "IF"
+            ".switch" in value -> "Switch"
+            ".wait" in value -> "Wait"
+            ".code" in value -> "Code"
+            else -> "Generic API"
         }
     }
 
     private fun showHelp() {
         val help = """
-NATEN is a mobile workflow engine inspired by n8n's node-and-connection model.
+NATEN is a mobile-first workflow automation engine inspired by n8n.
 
-Create nodes from the palette.
-Tap a node to configure it.
-Drag a node to move it.
-Drag from the output dot on the right to another node to create a connection.
-IF connections ask for true/false. Switch connections ask for a route.
+Core controls:
+• + Add Node opens the searchable node library.
+• Tap a node to configure it.
+• Drag a node to move it.
+• Drag from the right output dot to another node's left input dot to connect.
+• IF and Filter connections can be TRUE/FALSE.
+• Switch connections can use named routes.
+• Run executes the graph on the phone.
+• Active turns on background automation.
 
-Run executes the connected graph on the phone.
-HTTP Request performs real network calls.
-AI Text can call Gemini or OpenAI-compatible endpoints.
-Wait, files, variables, notifications, sharing and URL actions are executed by Android.
-The Active switch schedules Schedule Trigger workflows using Android alarms.
+Background:
+• Schedule Trigger workflows use Android alarms.
+• Webhook/Chat workflows can keep an Android foreground service listening on port 8787.
+• The phone OS can still defer or restrict background work according to its power-management rules.
 
-Expressions supported: JSON fields, workflow variables, and current time.
+Expressions:
+Use {{$json.field}}, {{$vars.name}} and {{$now}} in node parameters.
 
-Files are stored in this app's private NATEN storage area.
+Integrations:
+Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that don't have a dedicated adapter. Dedicated integration buttons currently use the same API execution layer.
 """.trimIndent()
 
         AlertDialog.Builder(this)
             .setTitle("NATEN help")
-            .setMessage(help)
+            .setMessage(help.replace("$" , ""))
             .setPositiveButton("OK", null)
             .show()
+    }
+
+    private fun requestNotificationPermission() {
+        if (
+            android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                REQ_NOTIFICATIONS
+            )
+        }
+    }
+
+    private fun refreshUi() {
+        nameView.text = state.name
+
+        activeSwitch.setOnCheckedChangeListener(null)
+        activeSwitch.isChecked = state.active
+        activeSwitch.setOnCheckedChangeListener { _, checked ->
+            state.active = checked
+            WorkflowStore.save(this, state)
+            syncAutomation()
+        }
+
+        statusView.text = if (state.active) "Automation active" else "Ready"
+        logView.text =
+            state.nodes.size.toString() + " nodes • " +
+                state.edges.size + " connections"
+        canvas.invalidate()
+    }
+
+    private fun setStatus(status: String, detail: String) {
+        statusView.text = status
+        logLines.add(detail)
+        while (logLines.size > 7) logLines.removeAt(0)
+        logView.text = logLines.joinToString("\n")
     }
 
     private fun toolbarButton(label: String): Button = Button(this).apply {
@@ -921,23 +1127,11 @@ Files are stored in this app's private NATEN storage area.
         isAllCaps = false
         setTextColor(Color.rgb(35, 40, 48))
         background = rounded(Color.WHITE, 12f, Color.rgb(211, 216, 224), 1)
-        setPadding(dp(11), 0, dp(11), 0)
-        minHeight = dp(40)
-        minimumHeight = dp(40)
-        layoutParams = LinearLayout.LayoutParams(-2, dp(40)).apply {
-            marginStart = dp(6)
-        }
-    }
-
-    private fun editField(label: String, value: String): EditText = EditText(this).apply {
-        hint = label
-        setText(value)
-        textSize = 14f
-        setSingleLine(false)
-        setPadding(dp(10), dp(8), dp(10), dp(8))
-        background = rounded(Color.WHITE, 10f, Color.rgb(209, 214, 222), 1)
-        layoutParams = LinearLayout.LayoutParams(-1, -2).apply {
-            setMargins(0, dp(3), 0, dp(5))
+        setPadding(dp(10), 0, dp(10), 0)
+        minHeight = dp(38)
+        minimumHeight = dp(38)
+        layoutParams = LinearLayout.LayoutParams(-2, dp(38)).apply {
+            marginStart = dp(5)
         }
     }
 
@@ -948,26 +1142,37 @@ Files are stored in this app's private NATEN storage area.
             setStroke(width, stroke)
         }
 
-    private fun refreshUi() {
-        nameView.text = state.name
-        activeSwitch.isChecked = state.active
-        statusView.text = if (state.active) "Automation active" else "Ready"
-        logView.text = if (state.nodes.isEmpty()) {
-            "Build a flow from the palette. Start with Manual or Schedule."
-        } else {
-            state.nodes.size.toString() + " node(s), " + state.edges.size + " connection(s)."
+    private fun dp(v: Int): Int =
+        (v * resources.displayMetrics.density).toInt()
+
+    private fun dpF(v: Int): Float =
+        v * resources.displayMetrics.density
+
+    inner class FrameLikeScroll(context: Context) : ViewGroup(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val width = MeasureSpec.getSize(widthMeasureSpec)
+            val height = MeasureSpec.getSize(heightMeasureSpec)
+            setMeasuredDimension(width, height)
+            children.forEach {
+                it.measure(
+                    MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
+                )
+            }
+        }
+
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            if (childCount == 0) return
+            getChildAt(0).layout(0, 0, r - l, b - t)
         }
     }
 
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-    private fun dpF(v: Int): Float = v * resources.displayMetrics.density
-    private fun dpF(v: Float): Float = v * resources.displayMetrics.density
-
     inner class WorkflowCanvas(context: Context) : View(context) {
-        val nodes = state.nodes
+        val nodes get() = state.nodes
         var selectedId: Int? = null
-        private val nodeW = dpF(178)
-        private val nodeH = dpF(90)
+
+        private val nodeW = dpF(182)
+        private val nodeH = dpF(92)
         private var dragId: Int? = null
         private var connectId: Int? = null
         private var moved = false
@@ -976,16 +1181,16 @@ Files are stored in this app's private NATEN storage area.
         private var tempX = 0f
         private var tempY = 0f
 
-        private val grid = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(224, 228, 235)
+        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(222, 226, 233)
         }
-        private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.rgb(149, 158, 171)
             strokeWidth = dpF(2.4f)
             style = Paint.Style.STROKE
         }
-        private val text = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val small = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 
         init {
             isClickable = true
@@ -993,7 +1198,7 @@ Files are stored in this app's private NATEN storage area.
         }
 
         override fun onDraw(c: Canvas) {
-            c.drawColor(Color.rgb(245, 247, 250))
+            c.drawColor(Color.rgb(244, 246, 249))
             drawGrid(c)
 
             state.edges.forEach { edge ->
@@ -1005,15 +1210,15 @@ Files are stored in this app's private NATEN storage area.
             if (connectId != null) {
                 val a = state.nodes.firstOrNull { it.id == connectId }
                 if (a != null) {
-                    line.color = Color.rgb(74, 104, 218)
-                    val startX = a.x + nodeW
-                    val startY = a.y + nodeH / 2f
                     val p = Path()
-                    p.moveTo(startX, startY)
-                    val mid = (startX + tempX) / 2f
-                    p.cubicTo(mid, startY, mid, tempY, tempX, tempY)
-                    c.drawPath(p, line)
-                    line.color = Color.rgb(149, 158, 171)
+                    val sx = a.x + nodeW
+                    val sy = a.y + nodeH / 2
+                    p.moveTo(sx, sy)
+                    val mid = (sx + tempX) / 2
+                    p.cubicTo(mid, sy, mid, tempY, tempX, tempY)
+                    edgePaint.color = Color.rgb(70, 103, 214)
+                    c.drawPath(p, edgePaint)
+                    edgePaint.color = Color.rgb(149, 158, 171)
                 }
             }
 
@@ -1026,7 +1231,7 @@ Files are stored in this app's private NATEN storage area.
             while (x < width) {
                 var y = 0f
                 while (y < height) {
-                    c.drawCircle(x, y, dpF(1.05f), grid)
+                    c.drawCircle(x, y, dpF(1.0f), gridPaint)
                     y += step
                 }
                 x += step
@@ -1034,84 +1239,77 @@ Files are stored in this app's private NATEN storage area.
         }
 
         private fun drawEdge(c: Canvas, a: FlowNode, b: FlowNode, branch: String) {
-            val startX = a.x + nodeW
-            val startY = a.y + nodeH / 2f
-            val endX = b.x
-            val endY = b.y + nodeH / 2f
+            val sx = a.x + nodeW
+            val sy = a.y + nodeH / 2
+            val ex = b.x
+            val ey = b.y + nodeH / 2
+            val p = Path()
+            p.moveTo(sx, sy)
+            val mid = (sx + ex) / 2
+            p.cubicTo(mid, sy, mid, ey, ex, ey)
 
-            val path = Path().apply {
-                moveTo(startX, startY)
-                val mid = (startX + endX) / 2f
-                cubicTo(mid, startY, mid, endY, endX, endY)
+            edgePaint.color = when {
+                a.type == "IF" && branch.equals("true", true) -> Color.rgb(40, 150, 99)
+                a.type == "IF" && branch.equals("false", true) -> Color.rgb(205, 80, 79)
+                else -> Color.rgb(149, 158, 171)
             }
-            line.color = if (a.type == "IF") {
-                if (branch == "true") Color.rgb(35, 155, 102) else Color.rgb(211, 87, 85)
-            } else Color.rgb(149, 158, 171)
+            c.drawPath(p, edgePaint)
 
-            c.drawPath(path, line)
-
-            val angle = Math.atan2((endY - (endY)).toDouble(), (endX - (endX - dpF(1))).toDouble())
-            val tip = PointF(endX, endY)
-            val size = dpF(6)
-            val arrow = Path().apply {
-                moveTo(tip.x, tip.y)
-                lineTo(tip.x - size, tip.y - size / 2)
-                lineTo(tip.x - size, tip.y + size / 2)
-                close()
-            }
             val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = edgePaint.color
                 style = Paint.Style.FILL
-                color = line.color
+            }
+            val arrow = Path().apply {
+                moveTo(ex, ey)
+                lineTo(ex - dpF(7), ey - dpF(4))
+                lineTo(ex - dpF(7), ey + dpF(4))
+                close()
             }
             c.drawPath(arrow, fill)
 
             if (branch.isNotBlank()) {
-                small.textSize = dpF(10)
-                small.color = line.color
-                val lx = (startX + endX) / 2f
-                val ly = (startY + endY) / 2f - dpF(6)
-                c.drawText(branch, lx, ly, small)
+                smallPaint.color = edgePaint.color
+                smallPaint.textSize = dpF(10)
+                c.drawText(branch, (sx + ex) / 2, (sy + ey) / 2 - dpF(5), smallPaint)
             }
         }
 
         private fun drawNode(c: Canvas, n: FlowNode) {
-            val selected = selectedId == n.id
             val rect = RectF(n.x, n.y, n.x + nodeW, n.y + nodeH)
+            val accent = accent(n.type)
 
             val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE
                 setShadowLayer(
-                    if (selected) dpF(9) else dpF(5),
+                    if (selectedId == n.id) dpF(10) else dpF(5),
                     0f,
                     dpF(3),
-                    Color.argb(42, 0, 0, 0)
+                    Color.argb(45, 0, 0, 0)
                 )
             }
             c.drawRoundRect(rect, dpF(15), dpF(15), shadow)
 
-            val accent = accentColor(n.type)
-            val stripe = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
             c.drawRoundRect(
                 RectF(n.x, n.y, n.x + dpF(7), n.y + nodeH),
                 dpF(15),
                 dpF(15),
-                stripe
+                Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
             )
 
-            text.color = Color.rgb(27, 31, 38)
-            text.textSize = dpF(14.5f)
-            text.typeface = Typeface.DEFAULT_BOLD
-            c.drawText(n.type, n.x + dpF(16), n.y + dpF(27), text)
+            textPaint.color = Color.rgb(27, 31, 38)
+            textPaint.textSize = dpF(14.5f)
+            textPaint.typeface = Typeface.DEFAULT_BOLD
+            c.drawText(n.type, n.x + dpF(16), n.y + dpF(27), textPaint)
 
-            small.color = Color.rgb(95, 102, 113)
-            small.textSize = dpF(11.2f)
-            drawEllipsized(c, n.title, n.x + dpF(16), n.y + dpF(50), nodeW - dpF(30))
+            smallPaint.color = Color.rgb(91, 98, 109)
+            smallPaint.textSize = dpF(11.2f)
+            drawEllipsized(c, n.title, n.x + dpF(16), n.y + dpF(50), nodeW - dpF(31), smallPaint)
 
-            small.color = Color.rgb(135, 142, 153)
-            small.textSize = dpF(9.5f)
-            c.drawText("#" + n.id, n.x + dpF(16), n.y + dpF(72), small)
+            smallPaint.color = Color.rgb(140, 146, 156)
+            smallPaint.textSize = dpF(9.5f)
+            c.drawText("#" + n.id, n.x + dpF(16), n.y + dpF(73), smallPaint)
 
-            val input = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.WHITE
                 style = Paint.Style.FILL
             }
@@ -1121,29 +1319,43 @@ Files are stored in this app's private NATEN storage area.
                 strokeWidth = dpF(2)
             }
 
-            c.drawCircle(n.x, n.y + nodeH / 2f, dpF(6), input)
-            c.drawCircle(n.x, n.y + nodeH / 2f, dpF(6), outline)
-            c.drawCircle(n.x + nodeW, n.y + nodeH / 2f, dpF(6), input)
-            c.drawCircle(n.x + nodeW, n.y + nodeH / 2f, dpF(6), outline)
+            val cy = n.y + nodeH / 2
+            c.drawCircle(n.x, cy, dpF(6), fill)
+            c.drawCircle(n.x, cy, dpF(6), outline)
+            c.drawCircle(n.x + nodeW, cy, dpF(6), fill)
+            c.drawCircle(n.x + nodeW, cy, dpF(6), outline)
 
-            if (selected) {
-                val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.rgb(77, 103, 210)
-                    style = Paint.Style.STROKE
-                    strokeWidth = dpF(2)
-                }
-                c.drawRoundRect(rect, dpF(15), dpF(15), border)
+            if (selectedId == n.id) {
+                c.drawRoundRect(
+                    rect,
+                    dpF(15),
+                    dpF(15),
+                    Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.rgb(78, 104, 210)
+                        style = Paint.Style.STROKE
+                        strokeWidth = dpF(2)
+                    }
+                )
             }
         }
 
-        private fun drawEllipsized(c: Canvas, value: String, x: Float, y: Float, max: Float) {
-            if (small.measureText(value) <= max) {
-                c.drawText(value, x, y, small)
+        private fun drawEllipsized(
+            c: Canvas,
+            value: String,
+            x: Float,
+            y: Float,
+            maxWidth: Float,
+            paint: Paint
+        ) {
+            if (paint.measureText(value) <= maxWidth) {
+                c.drawText(value, x, y, paint)
                 return
             }
-            var s = value
-            while (s.length > 1 && small.measureText(s + "…") > max) s = s.dropLast(1)
-            c.drawText(s + "…", x, y, small)
+            var text = value
+            while (text.length > 1 && paint.measureText(text + "…") > maxWidth) {
+                text = text.dropLast(1)
+            }
+            c.drawText(text + "…", x, y, paint)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -1152,9 +1364,9 @@ Files are stored in this app's private NATEN storage area.
                     downX = event.x
                     downY = event.y
                     moved = false
-
                     val hit = findNode(event.x, event.y)
-                    if (hit != null && isOutputHandle(hit, event.x, event.y)) {
+
+                    if (hit != null && isOutput(hit, event.x, event.y)) {
                         connectId = hit.id
                         tempX = event.x
                         tempY = event.y
@@ -1179,13 +1391,14 @@ Files are stored in this app's private NATEN storage area.
 
                     val id = dragId ?: return true
                     val node = state.nodes.firstOrNull { it.id == id } ?: return true
+
                     val dx = event.x - downX
                     val dy = event.y - downY
-
                     if (abs(dx) + abs(dy) > dpF(5)) moved = true
 
-                    node.x = (node.x + dx).coerceIn(0f, width - nodeW)
-                    node.y = (node.y + dy).coerceIn(0f, height - nodeH)
+                    node.x = (node.x + dx).coerceIn(0f, (width - nodeW).coerceAtLeast(0f))
+                    node.y = (node.y + dy).coerceIn(0f, (height - nodeH).coerceAtLeast(0f))
+
                     downX = event.x
                     downY = event.y
                     invalidate()
@@ -1194,15 +1407,16 @@ Files are stored in this app's private NATEN storage area.
 
                 MotionEvent.ACTION_UP -> {
                     if (connectId != null) {
-                        val fromId = connectId
+                        val source = state.nodes.firstOrNull { it.id == connectId }
                         connectId = null
-                        val target = findInputTarget(event.x, event.y)
-                        if (target != null) {
-                            val from = state.nodes.firstOrNull { it.id == fromId }
-                            if (from != null) connectNodes(from, target)
+
+                        val target = findInput(event.x, event.y)
+                        if (source != null && target != null) {
+                            connectNodes(source, target)
                         } else {
-                            setStatus("Connection cancelled", "Drop on a target node's input dot.")
+                            setStatus("Connection cancelled", "Drop on an input dot.")
                         }
+
                         invalidate()
                         return true
                     }
@@ -1211,7 +1425,7 @@ Files are stored in this app's private NATEN storage area.
                     if (!moved && selected != null) {
                         showNodeEditor(selected)
                     } else {
-                        WorkflowJson.save(this@MainActivity, state)
+                        WorkflowStore.save(this@MainActivity, state)
                     }
 
                     dragId = null
@@ -1227,19 +1441,16 @@ Files are stored in this app's private NATEN storage area.
             return true
         }
 
-        private fun isOutputHandle(n: FlowNode, x: Float, y: Float): Boolean {
-            val hx = n.x + nodeW
-            val hy = n.y + nodeH / 2f
+        private fun isOutput(node: FlowNode, x: Float, y: Float): Boolean {
+            val hx = node.x + nodeW
+            val hy = node.y + nodeH / 2
             return distance(x, y, hx, hy) <= dpF(18)
         }
 
-        private fun findInputTarget(x: Float, y: Float): FlowNode? {
-            return state.nodes.asReversed().firstOrNull { n ->
-                val hx = n.x
-                val hy = n.y + nodeH / 2f
-                distance(x, y, hx, hy) <= dpF(22)
+        private fun findInput(x: Float, y: Float): FlowNode? =
+            state.nodes.asReversed().firstOrNull {
+                distance(x, y, it.x, it.y + nodeH / 2) <= dpF(22)
             }
-        }
 
         private fun findNode(x: Float, y: Float): FlowNode? =
             state.nodes.asReversed().firstOrNull {
@@ -1250,22 +1461,19 @@ Files are stored in this app's private NATEN storage area.
         private fun distance(a: Float, b: Float, c: Float, d: Float): Float {
             val dx = a - c
             val dy = b - d
-            return kotlin.math.sqrt(dx * dx + dy * dy)
+            return sqrt(dx * dx + dy * dy)
         }
 
-        private fun accentColor(type: String): Int = when (type) {
-            "Manual Trigger", "Schedule Trigger", "Webhook Trigger" -> Color.rgb(58, 110, 232)
-            "HTTP Request" -> Color.rgb(23, 131, 125)
-            "Edit Fields" -> Color.rgb(96, 106, 221)
-            "IF", "Switch" -> Color.rgb(213, 138, 37)
-            "Wait" -> Color.rgb(115, 123, 135)
-            "AI Text" -> Color.rgb(133, 76, 199)
-            "Code" -> Color.rgb(54, 108, 177)
-            "Notification", "Open URL", "Share Text" -> Color.rgb(29, 147, 102)
-            "Read File", "Write File", "Set Variable" -> Color.rgb(106, 98, 167)
-            "Log" -> Color.rgb(95, 103, 115)
-            "Stop / Error" -> Color.rgb(205, 76, 77)
-            else -> Color.rgb(92, 100, 112)
+        private fun accent(type: String): Int = when (type) {
+            "Manual Trigger", "Schedule Trigger", "Webhook Trigger", "Chat Trigger", "Error Trigger" ->
+                Color.rgb(55, 109, 232)
+            "HTTP Request", "Generic API", "GraphQL" -> Color.rgb(26, 137, 131)
+            "IF", "Filter", "Switch" -> Color.rgb(214, 139, 36)
+            "AI Text", "AI Agent" -> Color.rgb(133, 76, 199)
+            "Wait", "Limit", "Loop Over Items" -> Color.rgb(110, 118, 131)
+            "Notification", "Open URL", "Share Text" -> Color.rgb(31, 150, 104)
+            "Stop / Error" -> Color.rgb(205, 77, 78)
+            else -> Color.rgb(91, 102, 118)
         }
     }
 
