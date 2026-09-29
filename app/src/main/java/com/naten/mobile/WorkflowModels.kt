@@ -282,13 +282,13 @@ fun FlowNode.ensureDefaultConfig() {
         "Read File", "Extract From File" -> config.put("filename", "input.txt")
         "Write File", "Convert to File" -> {
             config.put("filename", "output.txt")
-            config.put("data", "{{$json}}")
+            config.put("data", "{{\$json}}")
         }
         "Set Variable" -> {
             config.put("key", "name")
             config.put("value", "NATEN")
         }
-        "Log" -> config.put("message", "{{$json}}")
+        "Log" -> config.put("message", "{{\$json}}")
         "Notification" -> {
             config.put("title", "NATEN")
             config.put("message", "Workflow finished")
@@ -300,7 +300,7 @@ fun FlowNode.ensureDefaultConfig() {
             config.put("endpoint", "https://api.openai.com/v1/chat/completions")
             config.put("apiKey", "")
             config.put("model", "gpt-4o-mini")
-            config.put("prompt", "Work with this data: {{$json}}")
+            config.put("prompt", "Work with this data: {{\$json}}")
             config.put("temperature", 0.4)
         }
         "Loop Over Items" -> config.put("batchSize", 1)
