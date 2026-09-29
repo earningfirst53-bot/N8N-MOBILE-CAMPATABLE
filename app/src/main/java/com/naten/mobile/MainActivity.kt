@@ -449,16 +449,6 @@ class MainActivity : Activity() {
                 label("Webhook listener: http://PHONE_IP:8787/<path>")
             }
 
-            in NodeCatalog.apiBackedTypes -> {
-                spinners["method"] = spinner("method", "Method", listOf("GET", "POST", "PUT", "PATCH", "DELETE"))
-                fields["url"] = textField("url", "URL")
-                fields["headers"] = textField("headers", "Headers (one per line: Key: Value)", true)
-                fields["body"] = textField("body", "Body", true)
-                fields["queryParams"] = textField("queryParams", "Query parameters (one per line: key=value)", true)
-                fields["credentialName"] = textField("credentialName", "Saved credential name (optional)")
-                fields["credentialHeader"] = textField("credentialHeader", "Credential header")
-                fields["credentialPrefix"] = textField("credentialPrefix", "Credential prefix")
-            }
             "YouTube" -> {
                 spinners["operation"] = spinner(
                     "operation",
@@ -477,6 +467,16 @@ class MainActivity : Activity() {
                 label("API keys access public YouTube data. Private account operations require an OAuth access token with the required YouTube scope.")
             }
 
+            in NodeCatalog.apiBackedTypes -> {
+                spinners["method"] = spinner("method", "Method", listOf("GET", "POST", "PUT", "PATCH", "DELETE"))
+                fields["url"] = textField("url", "URL")
+                fields["headers"] = textField("headers", "Headers (one per line: Key: Value)", true)
+                fields["body"] = textField("body", "Body", true)
+                fields["queryParams"] = textField("queryParams", "Query parameters (one per line: key=value)", true)
+                fields["credentialName"] = textField("credentialName", "Saved credential name (optional)")
+                fields["credentialHeader"] = textField("credentialHeader", "Credential header")
+                fields["credentialPrefix"] = textField("credentialPrefix", "Credential prefix")
+            }
             "GraphQL" -> {
                 fields["url"] = textField("url", "GraphQL URL")
                 fields["headers"] = textField("headers", "Headers", true)
@@ -1083,7 +1083,16 @@ class MainActivity : Activity() {
             val id = o.optString("id").toIntOrNull() ?: i + 1
             val mapped = mapN8nType(o.optString("type"))
             val pos = o.optJSONArray("position") ?: JSONArray()
-            val cfg = o.optJSONObject("parameters") ?: JSONObject()
+            val cfg = JSONObject(
+                (o.optJSONObject("parameters") ?: JSONObject()).toString()
+            )
+            if (mapped == "Unsupported / Imported") {
+                cfg.put("originalType", o.optString("type", "unknown"))
+                val credentialRef = o.optJSONObject("credentials")
+                if (credentialRef != null) {
+                    cfg.put("credentialReference", credentialRef.toString())
+                }
+            }
 
             val node = FlowNode(
                 id = id,
@@ -1091,7 +1100,7 @@ class MainActivity : Activity() {
                 title = o.optString("name", mapped),
                 x = pos.optDouble(0, 24.0).toFloat(),
                 y = pos.optDouble(1, 24.0).toFloat(),
-                config = JSONObject(cfg.toString())
+                config = cfg
             )
             node.ensureDefaultConfig()
             imported.nodes.add(node)
