@@ -43,7 +43,16 @@ object WorkflowStore {
 fun FlowNode.ensureDefaultConfig() {
     if (!config.has("retries")) config.put("retries", 0); if (!config.has("timeoutSeconds")) config.put("timeoutSeconds", 60); if (!config.has("continueOnFail")) config.put("continueOnFail", false)
     when (type) {
-        "Schedule Trigger" -> { if (!config.has("interval")) config.put("interval", 60); if (!config.has("unit")) config.put("unit", "minutes") }
+        "Schedule Trigger" -> {
+            if (!config.has("mode")) config.put("mode", "interval")
+            if (!config.has("interval")) config.put("interval", 60)
+            if (!config.has("unit")) config.put("unit", "minutes")
+            if (!config.has("hour")) config.put("hour", 9)
+            if (!config.has("minute")) config.put("minute", 0)
+            if (!config.has("days")) config.put("days", "MON")
+            if (!config.has("timezone")) config.put("timezone", java.util.TimeZone.getDefault().id)
+            if (!config.has("runAtEpochMs")) config.put("runAtEpochMs", 0L)
+        }
         "HTTP Request", "Generic API" -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty().ifBlank { "https://example.com" }); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", ""); if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ") }
         "YouTube" -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&q=technology"); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", "youtube_api_key"); if (!config.has("credentialHeader")) config.put("credentialHeader", "X-Goog-Api-Key"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "") }
         "GraphQL" -> { if (!config.has("url")) config.put("url", "https://example.com/graphql"); if (!config.has("query")) config.put("query", "query { hello }"); if (!config.has("variables")) config.put("variables", "{}"); if (!config.has("headers")) config.put("headers", "") }
@@ -75,7 +84,26 @@ fun FlowNode.ensureDefaultConfig() {
         "Notification" -> { if (!config.has("title")) config.put("title", "NATEN"); if (!config.has("message")) config.put("message", "Workflow finished") }
         "Open URL" -> if (!config.has("url")) config.put("url", "https://n8n.io")
         "Share Text" -> if (!config.has("text")) config.put("text", "Hello from NATEN")
-        "AI Text", "AI Agent" -> { if (!config.has("provider")) config.put("provider", "OpenAI-compatible"); if (!config.has("endpoint")) config.put("endpoint", "https://api.openai.com/v1/chat/completions"); if (!config.has("apiKey")) config.put("apiKey", ""); if (!config.has("model")) config.put("model", "gpt-4o-mini"); if (!config.has("prompt")) config.put("prompt", "Work with this data: {{" + '$' + "json}}"); if (!config.has("temperature")) config.put("temperature", 0.4); if (!config.has("credentialName")) config.put("credentialName", "") }
+        "AI Text", "AI Agent" -> {
+            if (!config.has("provider")) config.put("provider", "OpenAI")
+            if (!config.has("endpoint")) config.put("endpoint", "https://api.openai.com/v1/chat/completions")
+            if (!config.has("apiKey")) config.put("apiKey", "")
+            if (!config.has("model")) config.put("model", "gpt-4o-mini")
+            if (!config.has("systemPrompt")) config.put("systemPrompt", "")
+            if (!config.has("prompt")) config.put("prompt", "Work with this data: {{" + '
+        "Loop Over Items" -> {
+            if (!config.has("batchSize")) config.put("batchSize", 1)
+            if (!config.has("continueOnEmpty")) config.put("continueOnEmpty", false)
+        }
+        in NodeCatalog.apiBackedTypes -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty()); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", ""); if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ") }
+        else -> Unit
+    }
+}
+ + "json}}")
+            if (!config.has("temperature")) config.put("temperature", 0.4)
+            if (!config.has("credentialName")) config.put("credentialName", "")
+            if (!config.has("responseFormat")) config.put("responseFormat", "text")
+        }
         "Loop Over Items" -> if (!config.has("batchSize")) config.put("batchSize", 1)
         in NodeCatalog.apiBackedTypes -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty()); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", ""); if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ") }
         else -> Unit
