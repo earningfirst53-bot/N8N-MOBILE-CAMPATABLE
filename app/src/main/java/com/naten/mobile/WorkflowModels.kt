@@ -286,9 +286,7 @@ fun FlowNode.ensureDefaultConfig() {
 
         "Switch" -> {
             if (!config.has("field")) config.put("field", "value")
-            if (!config.has("cases")) config.put("cases", "one
-two
-three")
+            if (!config.has("cases")) config.put("cases", "one\ntwo\nthree")
         }
 
         "Wait" -> if (!config.has("seconds")) config.put("seconds", 2)
