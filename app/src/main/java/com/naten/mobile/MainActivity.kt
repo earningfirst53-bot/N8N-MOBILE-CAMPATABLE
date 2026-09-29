@@ -702,6 +702,10 @@ class MainActivity : Activity() {
             val e = EditText(this).apply {
                 setText(node.config.optString(key, ""))
                 textSize = 14f
+                // These fields use a white background, so entered values must use a dark
+                // text color; otherwise numeric values are effectively invisible.
+                setTextColor(Color.rgb(28, 31, 36))
+                setHintTextColor(Color.rgb(120, 124, 132))
                 setPadding(dp(10), dp(7), dp(10), dp(7))
                 background = rounded(Color.WHITE, 10f, Color.rgb(209, 214, 222), 1)
                 if (!multi) setSingleLine(true)
