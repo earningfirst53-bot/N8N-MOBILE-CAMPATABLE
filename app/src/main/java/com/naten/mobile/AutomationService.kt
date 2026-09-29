@@ -213,9 +213,10 @@ class AutomationService : Service() {
 
                     override fun onLog(message: String) = Unit
 
-                    override fun onFinished(ok: Boolean, result: String) {
+                    override fun onFinished(ok: Boolean, result: String, finalOutput: JSONObject) {
                         success = ok
                         message = result
+                        output = JSONObject(finalOutput.toString())
                         latch.countDown()
                     }
                 },
