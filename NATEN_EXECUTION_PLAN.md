@@ -1,241 +1,470 @@
-# NATEN Mobile — Execution & Completion Plan
+# NATEN Mobile — Master Build Instructions
 
-## Product target
+## Mission
 
-NATEN is being developed as a mobile-first workflow automation platform inspired by the n8n node/connection model.
+Build NATEN into a real Android-first workflow automation platform that feels and behaves like a serious mobile counterpart to n8n.
 
-The goal is not to create a decorative n8n-like screen. A workflow must be executable, persistent, debuggable, importable/exportable, and able to continue running when the app UI is closed.
+The app must never be an empty visual shell. Every visible control must have a real state change and/or runtime consequence.
 
-## Non-negotiable requirements
+The user has no requirement for desktop ownership or a private server. NATEN must run workflows on the Android phone itself wherever Android permits, including background execution when the app UI is closed.
 
-- Android-first and usable from a phone.
-- No dependency on the user owning a laptop or server.
-- Workflows execute locally on the phone.
-- Background automation is a first-class feature.
-- Schedule-based workflows continue after the app UI closes where Android permits.
-- Webhook/chat workflows can keep an Android foreground automation service.
-- Node buttons and controls must perform real actions.
-- Every node added to the canvas must have configurable data and a defined runtime behavior or a clearly exposed generic API fallback.
-- Save, restore, import, export, execution history, errors, and logs must work.
-- The canvas must support real node-to-node connections rather than animation-only lines.
-- Build must be validated by GitHub Actions before an APK is handed over.
-- Do not claim a feature is implemented unless its runtime path exists.
+## User requirements to preserve
 
-## n8n capability target
+- Android phone is the primary computer for NATEN.
+- No laptop is required to create, save, activate, debug, import, export, or run workflows.
+- The visual workflow builder must be node-based and comparable in concept to desktop n8n.
+- Nodes must be real and configurable, not decorative.
+- Connections must be real graph edges.
+- Run must actually execute the graph.
+- Active workflows must continue in the background.
+- Scheduled workflows must run with the screen off and the UI closed where Android permits.
+- Webhook-based workflows must be able to stay available through a deliberate Android foreground automation mode.
+- Long-running/background execution must not depend on the Activity remaining open.
+- Build/test/fix/build again before handing over an APK.
+- Do not claim unsupported features are complete.
+- The immediate goal is feature completeness and reliability; visual polishing comes afterward.
 
-Current n8n documentation groups capabilities around triggers, flow logic, working with data, built-in core nodes, AI functionality, credentials, error handling, sub-workflows, and a very large application integration catalogue.
+## n8n parity target
 
-NATEN therefore uses three layers:
+Use current n8n behavior as the architectural reference: n8n has a large node ecosystem, trigger varieties, executable nodes, declarative nodes, credential systems, error handling, sub-workflows, AI capabilities, and many application integrations.
 
-1. Core runtime nodes implemented directly on Android.
-2. Generic HTTP/GraphQL/API nodes that can connect to services without a bespoke mobile SDK.
-3. Dedicated adapters added progressively for high-value services.
+NATEN should target:
 
-This keeps the APK practical while preserving broad interoperability.
+1. High semantic compatibility for common workflow structures.
+2. A broad searchable node catalog.
+3. A generic API/HTTP path for services without a dedicated adapter.
+4. n8n-style JSON import/export where semantics are known.
+5. An adapter architecture so more integrations can be added without rewriting the engine.
 
-## Runtime architecture
+Do not copy n8n's Node.js runtime into Android. Reimplement the workflow semantics natively.
 
-### Workflow model
+## Current platform architecture
 
-- Workflow identity and name.
-- Nodes with position, type, title, configuration.
-- Directed edges.
-- Branch labels for conditional nodes.
-- Active/inactive state.
-- Persistent per-workflow storage.
+### 1. Workflow storage
 
-### Execution engine
+Every workflow has:
+- stable ID
+- name
+- active/inactive state
+- nodes
+- edges
+- branch labels
+- node configuration
+- execution history
 
-- Trigger resolution.
-- Graph traversal.
-- Data passing between nodes.
-- Expressions and variables.
-- Per-node execution status.
-- Failure propagation.
-- Execution history.
-- Background execution mode.
-- Webhook request input.
+Multiple workflows must coexist and remain independently activatable.
 
-### Background automation
+### 2. Node model
 
-Use Android-native scheduling plus foreground execution:
+Every node definition must contain:
+- stable type
+- category
+- display title
+- description
+- configuration schema
+- runtime executor
+- trigger classification when applicable
+- input/output expectations
+- documentation/help text
+- supported/unsupported state
 
-- Schedule Trigger -> Android alarm -> foreground AutomationService -> WorkflowEngine.
-- Active webhook/chat workflows -> persistent AutomationService + local HTTP listener.
-- Boot/package replacement -> active schedules are restored.
-- Avoid a permanently spinning background loop for ordinary schedules.
-- Do not rely on UI process lifetime for automation.
+An unsupported imported n8n node must be preserved and clearly marked. Never silently execute it as a no-op.
 
-Android 12+ restricts arbitrary background foreground-service starts, and Android 14+ requires foreground-service types. NATEN's always-on automation uses the documented specialUse category with an explicit service use-case declaration. Android 15 also places time limits on data-sync/media-processing foreground services, so those types are not used as a generic automation workaround.
+### 3. Execution engine
 
-## Core node families
+The runtime must support:
+- manual execution
+- schedule execution
+- webhook execution
+- graph traversal
+- branches
+- data passing
+- expressions
+- variables
+- retries
+- timeout handling
+- continue-on-fail behavior
+- per-node status
+- execution logs
+- final output
+- error propagation
+- execution history
+- cancellation where possible
+
+Use a stable internal execution context rather than passing ad-hoc strings between nodes.
+
+### 4. Data model
+
+Work toward an item-oriented data model similar to n8n:
+- one or more JSON items
+- binary/file references
+- current item
+- full input items
+- workflow variables
+- execution metadata
+
+Core data nodes must operate on collections, not only a single JSON object.
+
+### 5. Expression system
+
+Support practical expressions such as:
+- JSON field lookup
+- nested JSON paths
+- workflow variables
+- current timestamp
+- simple string interpolation
+- common comparisons
+- safe arithmetic/basic transforms
+
+Expressions must be parsed consistently across nodes.
+
+## Node families to implement
 
 ### Triggers
+- Manual Trigger
+- Schedule Trigger
+- Webhook Trigger
+- Chat Trigger
+- Error Trigger
+- polling/event triggers as Android capability allows
 
-Manual, Schedule, Webhook, Chat, Error, and later event/polling triggers.
+### Flow
+- IF
+- Switch
+- Filter
+- Merge
+- Loop Over Items
+- Wait
+- Stop/Error
+- Execute Sub-workflow
+- Respond to Webhook
 
-### Flow logic
-
-IF, Filter, Switch, Merge, Loop Over Items, Wait, Stop/Error, Execute Sub-workflow.
-
-### Data
-
-Edit Fields, Limit, Remove Duplicates, Rename Keys, Sort, Split Out, Summarize, JSON Parse/Stringify, Date & Time.
-
-### Content and utility
-
-Code, Markdown, HTML, XML, Crypto, No Operation.
+### Data transformation
+- Edit Fields
+- Limit
+- Remove Duplicates
+- Rename Keys
+- Sort
+- Split Out
+- Summarize
+- JSON Parse
+- JSON Stringify
+- Date & Time
+- Code/safe transform
+- Markdown
+- HTML
+- XML
+- Crypto
 
 ### Files
-
-Read, Write, Convert to File, Extract From File.
-
-### AI
-
-AI Text, AI Agent, model provider gateway, later tool calling, memory, structured output, embeddings, retrievers, vector stores, and MCP.
+- Read File
+- Write File
+- Convert to File
+- Extract From File
+- binary/file metadata
 
 ### Connectivity
+- HTTP Request
+- Generic API
+- GraphQL
+- pagination
+- headers/query/body
+- auth modes
+- retry/timeout controls
 
-HTTP Request, Generic API, GraphQL.
+### Android
+- Notification
+- Open URL
+- Share Text
+- background automation controls
+- file picker/import/export
+- optional future device-action adapters subject to Android permission rules
 
-### Android actions
+### AI
+- AI Text
+- AI Agent
+- model/provider credentials
+- structured output
+- tool calls
+- memory
+- embeddings
+- vector retrieval
+- MCP
+- provider fallback
 
-Notification, Open URL, Share Text, background service control.
+### Integrations
 
-### Service adapters
+Start with broad API-backed adapters, then add native operation panels and OAuth:
+- Gmail
+- Google Sheets
+- Google Drive
+- Telegram
+- Slack
+- Discord
+- GitHub
+- Notion
+- Airtable
+- Trello
+- WordPress
+- Shopify
+- Stripe
+- Calendar
+- RSS
+- databases
+- email/SMTP
 
-Gmail, Google Sheets, Telegram, Slack, Email and more can begin as API-backed adapters and gain richer credentials/operations later.
+The catalog should grow toward the current n8n application ecosystem instead of pretending a finite first release contains every integration.
 
-## Compatibility strategy
+## Background automation — mandatory
 
-NATEN should import/export an n8n-style workflow structure where practical.
+Background automation is not optional.
 
-Unknown n8n node types must not silently pretend to be supported. The importer should preserve the original node metadata and offer a Generic API or unsupported-node warning.
+### Schedule workflows
 
-The long-term target is high semantic compatibility for common workflows, not binary compatibility with n8n's Node.js runtime.
+Use Android scheduling to wake the app without the UI:
+- active Schedule Trigger -> scheduled wake-up
+- wake-up -> load exact workflow ID
+- execute workflow in background
+- persist result
+- show completion/failure notification
+- schedule next run
 
-## Bug-clearing loop
+Do not use a permanent busy loop.
 
-Every feature cycle follows:
+### Webhook workflows
 
-1. Implement.
-2. Commit.
-3. GitHub Actions debug build.
-4. Read compiler/runtime packaging errors.
-5. Fix.
+For explicitly enabled webhook workflows:
+- keep a foreground automation service alive
+- show a persistent status notification
+- listen on the local interface
+- validate path/method/request size
+- execute matching workflow
+- return configured webhook response
+
+The service must stop automatically when no webhook workflow requires it.
+
+### Boot/update recovery
+
+On device boot and app replacement:
+- reload active workflows
+- restore schedules
+- restart webhook mode only when active workflows require it
+
+### Android restrictions
+
+Design around Android's background and foreground-service restrictions rather than trying to bypass them.
+
+The UI must explain when:
+- battery optimization may delay automation
+- manufacturer task killers may interfere
+- notification permission is disabled
+- a foreground service is required
+- an OS restriction makes a requested trigger impossible
+
+## Credentials and security
+
+Use the Android Keystore-backed credential vault.
+
+Credential types to support progressively:
+- API key
+- bearer token
+- basic auth
+- custom header
+- OAuth2
+- service account where feasible
+
+Rules:
+- never write secrets into logs
+- never include secrets in ordinary execution history
+- mask secret fields
+- warn before exporting workflows containing embedded secrets
+- prefer credential references over raw secrets in node configs
+- prevent path traversal in file nodes
+- keep webhook server intentionally scoped
+
+## Mobile editor requirements
+
+The editor should become a true mobile workflow IDE:
+
+- infinite-ish pan/zoom canvas
+- pinch zoom
+- two-finger pan
+- node drag
+- connection drag
+- branch labeling
+- multi-select
+- delete
+- duplicate
+- copy/paste
+- undo/redo
+- snap/grid options
+- auto-layout
+- minimap
+- searchable node library
+- recent/favorite nodes
+- node execution badges
+- input/output inspector
+- test data
+- execution data per node
+
+## Workflow operations
+
+Support:
+- new
+- rename
+- duplicate
+- delete
+- activate/deactivate
+- export
+- import
+- save
+- execution history
+- retry last execution
+- clear execution history
+- templates
+
+## Import/export
+
+Native format:
+- NATEN workflow JSON
+
+Compatibility format:
+- n8n-style workflow JSON
+
+Rules:
+- preserve node names, IDs, positions, parameters, and connections when possible
+- clearly mark unsupported nodes
+- offer fallback to Generic API where useful
+- never silently change a workflow and call it compatible
+
+## Execution reliability
+
+Each execution must have:
+- run ID
+- start/end timestamps
+- duration
+- workflow ID
+- node-by-node status
+- node inputs where safe
+- node outputs where safe
+- error message
+- retry count
+- background/foreground source
+
+Add:
+- timeout
+- retry policy
+- exponential backoff
+- continue-on-fail
+- cancellation
+- safe size limits
+
+## Testing loop
+
+Every implementation pass must follow:
+
+1. Inspect current repo and preserve working functionality.
+2. Make one coherent architectural change.
+3. Compile with GitHub Actions.
+4. Read the actual build logs.
+5. Fix every compile/package error.
 6. Rebuild.
-7. Verify artifact exists.
-8. Hand over APK only from a successful run.
+7. Verify the artifact exists.
+8. Inspect the APK/archive.
+9. Only then continue to the next layer.
+10. Hand over the APK only from a successful build.
 
-## Engineering phases
+Never stack duplicate runtime files or duplicate methods.
+Never replace a working engine with an uncompiled draft.
+Never present a failed build as a finished APK.
 
-### Phase A — platform foundation
-
-- Multi-workflow storage.
-- Searchable node library.
-- Functional graph editing and connections.
-- Expanded core runtime.
-- Generic API/GraphQL.
-- Background scheduling.
-- Foreground automation service.
-- Local webhook listener.
-- Execution history.
-- n8n-style import/export.
-
-### Phase B — execution depth
-
-- True multi-item data model.
-- Loop/batch execution semantics.
-- Retry policies.
-- Per-node timeouts.
-- Continue-on-fail/error branches.
-- Execution data inspector.
-- Manual input/test data.
-- Credential vault using Android Keystore.
-- Better webhook responses.
-- Sub-workflows.
-
-### Phase C — integration platform
-
-- OAuth2.
-- API key/basic auth credential types.
-- Reusable credentials.
-- Gmail.
-- Google Sheets.
-- Telegram.
-- Slack.
-- Discord.
-- Notion.
-- Google Drive.
-- GitHub.
-- Airtable.
-- Trello.
-- WordPress.
-- Shopify.
-- Stripe.
-- Calendar.
-- RSS.
-- Database/API connectors.
-
-### Phase D — AI automation
-
-- AI Agent with tools.
-- MCP client/server support.
-- Structured output.
-- Memory.
-- Embeddings.
-- Vector stores.
-- Human approval steps.
-- AI tool-call execution.
-- Model switching/fallback.
-- Local-model adapters where practical.
-
-### Phase E — mobile UX parity
-
-- Infinite canvas.
-- Pinch zoom/pan.
-- Minimap.
-- Node groups.
-- Multi-select.
-- Copy/paste.
-- Undo/redo.
-- Keyboard support for tablets.
-- Node execution badges.
-- Input/output data panels.
-- Search across workflows.
-- Templates.
-- Import from file/share sheet.
-- Mobile-optimized credential editor.
-
-## Background reliability requirements
-
-Automation must continue with the screen off and the app UI closed where Android permits it.
-
-The app must surface when Android battery optimization, manufacturer restrictions, missing notification permission, or OS policy can affect automation.
-
-For always-on webhook use, the foreground notification is intentional and must show that automation is active.
-
-## Security requirements
-
-- API keys and credentials must never be logged.
-- Credentials should move to Android Keystore-backed secure storage.
-- Export should warn when secrets are included.
-- Webhook server must validate paths and request sizes.
-- Prevent path traversal in file nodes.
-- Do not expose private app files to arbitrary network clients.
-- Restrict local server behavior to explicitly enabled workflows.
-
-## Definition of real
+## Definition of real functionality
 
 A feature is complete only when:
-- its UI control changes persisted state,
-- the engine consumes that state,
-- execution produces a real observable result,
-- failures are surfaced,
-- and the build contains that code path.
 
-Animation-only controls are explicitly out of scope.
+UI -> persisted configuration -> runtime executor -> observable result -> error handling -> build verification.
 
-## Project handoff rule
+A button that only changes animation is not a feature.
 
-Do not stop at a visual milestone. Continue through implementation, compile/build validation, bug fixing, and successful APK generation before presenting the build as ready for the next testing cycle.
+## Execution phases
+
+### Phase 1 — Stabilize the platform
+- clean duplicated/broken runtime
+- compile cleanly
+- preserve current working multi-workflow, node library, credentials, webhook and background capabilities
+- establish deterministic execution context
+
+### Phase 2 — Deep execution engine
+- item-oriented data
+- proper loops/batches
+- retries
+- timeouts
+- cancellation
+- continue-on-fail
+- execution inspector
+- sub-workflows
+- webhook responses
+
+### Phase 3 — Background reliability
+- robust schedule wakeups
+- foreground webhook mode
+- boot/update restoration
+- automation status screen
+- battery/power restriction diagnostics
+- notification controls
+
+### Phase 4 — Integration platform
+- credential types
+- OAuth2
+- API adapters
+- pagination
+- rate-limit handling
+- major service integrations
+- import/export improvements
+
+### Phase 5 — AI platform
+- AI agent
+- tools
+- structured outputs
+- memory
+- MCP
+- embeddings/vector retrieval
+- model fallback
+
+### Phase 6 — Mobile IDE
+- zoom/pan
+- minimap
+- selection/editing
+- undo/redo
+- auto-layout
+- inspector
+- templates
+- workflow search
+
+### Phase 7 — Release hardening
+- crash/error handling
+- migration tests
+- background reliability tests
+- APK install verification
+- final smoke workflows
+- then visual polish
+
+## Immediate acceptance test
+
+The next APK must be able to demonstrate, on an Android device:
+
+Manual -> Edit Fields -> HTTP Request -> IF -> Notification/Log
+
+Schedule -> HTTP Request -> Notification
+
+Webhook -> HTTP Request -> Respond to Webhook
+
+and must retain workflow state after the UI is closed.
+
+The result of these workflows must be visible in execution history.
+
+## Product truth
+
+NATEN is intended to become a mobile-first automation platform, not a skin around n8n.
+
+Current n8n contains a very large and changing integration ecosystem. NATEN should progressively cover that ecosystem through native adapters, generic API support, and compatible workflow import/export rather than falsely claiming one APK implements every n8n node immediately.
