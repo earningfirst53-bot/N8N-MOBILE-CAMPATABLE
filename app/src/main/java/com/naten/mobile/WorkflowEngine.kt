@@ -115,7 +115,9 @@ class WorkflowEngine(private val context: Context) {
                         }
 
                         if (attempt < maxAttempts) {
-                            report("Retry " + (attempt + 1) + "/" + maxAttempts)
+                            val backoffMs = (250L * (1L shl attempt.coerceAtMost(6))).coerceAtMost(8_000L)
+                            report("Retry " + (attempt + 1) + "/" + maxAttempts + " after " + backoffMs + "ms")
+                            Thread.sleep(backoffMs)
                         }
                     }
 
@@ -218,6 +220,10 @@ class WorkflowEngine(private val context: Context) {
         report: (String) -> Unit
     ): NodeResult {
         val c = node.config
+
+        if (node.type == "YouTube") {
+            return executeYouTube(c, input, variables, report)
+        }
 
         if (node.type in NodeCatalog.apiBackedTypes) {
             return executeHttp(c, input, variables, report)
@@ -577,6 +583,11 @@ class WorkflowEngine(private val context: Context) {
                 NodeResult(JSONObject(input.toString()))
             }
 
+            "Unsupported / Imported" -> {
+                val original = c.optString("originalType").ifBlank { node.title }
+                throw IllegalStateException("Unsupported imported n8n node: " + original)
+            }
+
             "Stop / Error" -> {
                 val body = render(c.optString("message", "Stopped"), input, variables)
                 NodeResult(
@@ -594,19 +605,27 @@ class WorkflowEngine(private val context: Context) {
                 val apiKey = c.optString("apiKey").ifBlank {
                     if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
                 }
-                val answer = if (provider == "Gemini") {
-                    callGemini(
+                val answer = when (provider.lowercase(Locale.US)) {
+                    "gemini" -> callGemini(
                         c.optString("endpoint"),
                         apiKey,
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
                     )
-                } else {
-                    callOpenAiCompatible(
+                    "anthropic", "claude" -> callAnthropic(
                         c.optString("endpoint"),
                         apiKey,
                         c.optString("model"),
+                        c.optString("systemPrompt"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                    else -> callOpenAiCompatible(
+                        c.optString("endpoint"),
+                        apiKey,
+                        c.optString("model"),
+                        c.optString("systemPrompt"),
                         prompt,
                         c.optDouble("temperature", 0.4)
                     )
@@ -755,6 +774,95 @@ class WorkflowEngine(private val context: Context) {
         return NodeResult(out)
     }
 
+    private fun executeYouTube(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val operation = c.optString("operation", "Search").trim().lowercase(Locale.US)
+        val credentialName = c.optString("credentialName").trim()
+        val apiKey = c.optString("apiKey").ifBlank {
+            if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
+        }
+        val accessToken = c.optString("accessToken").ifBlank {
+            if (c.optString("accessTokenCredential").isBlank()) "" 
+            else CredentialVault.get(context, c.optString("accessTokenCredential").trim()).orEmpty()
+        }
+
+        fun url(path: String, params: Map<String, String>): String {
+            val query = params.entries.joinToString("&") {
+                java.net.URLEncoder.encode(it.key, "UTF-8") + "=" +
+                    java.net.URLEncoder.encode(render(it.value, input, variables), "UTF-8")
+            }
+            return "https://www.googleapis.com/youtube/v3/" + path + "?" + query
+        }
+
+        val params = linkedMapOf<String, String>()
+        var path = "search"
+
+        when (operation) {
+            "my channel", "mychannel", "my_channel" -> {
+                require(accessToken.isNotBlank()) { "YouTube My Channel needs an OAuth access token." }
+                path = "channels"
+                params["part"] = "snippet,contentDetails,statistics"
+                params["mine"] = "true"
+            }
+            "channel", "get channel", "get_channel" -> {
+                params["part"] = "snippet,contentDetails,statistics"
+                params["id"] = c.optString("channelId")
+            }
+            "videos", "channel videos", "search channel videos", "channel_videos" -> {
+                path = "search"
+                params["part"] = "snippet"
+                params["type"] = "video"
+                params["channelId"] = c.optString("channelId")
+                params["order"] = c.optString("order", "date")
+                params["maxResults"] = c.optString("maxResults", "10")
+            }
+            "video", "get video", "get_video" -> {
+                path = "videos"
+                params["part"] = "snippet,contentDetails,statistics"
+                params["id"] = c.optString("videoId")
+            }
+            else -> {
+                path = "search"
+                params["part"] = "snippet"
+                params["type"] = c.optString("type", "video")
+                params["q"] = c.optString("query", "")
+                params["order"] = c.optString("order", "relevance")
+                params["maxResults"] = c.optString("maxResults", "10")
+            }
+        }
+
+        require(
+            operation.contains("my") && operation.contains("channel") ||
+                params.values.any { it.isNotBlank() }
+        ) { "YouTube operation is missing required parameters." }
+
+        val requestConfig = JSONObject().apply {
+            put("method", "GET")
+            put("url", url(path, params))
+            if (accessToken.isNotBlank()) {
+                put("headers", "Authorization: Bearer " + accessToken)
+            } else {
+                require(apiKey.isNotBlank()) { "YouTube API key or OAuth access token is required." }
+                val base = optString("url")
+            }
+        }
+
+        var finalUrl = requestConfig.optString("url")
+        if (accessToken.isBlank()) {
+            finalUrl += "&key=" + java.net.URLEncoder.encode(apiKey, "UTF-8")
+        }
+
+        requestConfig.put("url", finalUrl)
+        requestConfig.put("headers", if (accessToken.isNotBlank()) "Authorization: Bearer " + accessToken else "")
+        requestConfig.put("body", "")
+        val result = executeHttp(requestConfig, input, variables, report)
+        return NodeResult(result.data)
+    }
+
     private fun executeGraphQl(
         c: JSONObject,
         input: JSONObject,
@@ -886,6 +994,7 @@ class WorkflowEngine(private val context: Context) {
         endpoint: String,
         key: String,
         model: String,
+        systemPrompt: String,
         prompt: String,
         temperature: Double
     ): String {
@@ -895,11 +1004,12 @@ class WorkflowEngine(private val context: Context) {
             put("model", model)
             put(
                 "messages",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put("content", prompt)
-                )
+                JSONArray().apply {
+                    if (systemPrompt.isNotBlank()) {
+                        put(JSONObject().put("role", "system").put("content", systemPrompt))
+                    }
+                    put(JSONObject().put("role", "user").put("content", prompt))
+                }
             )
             put("temperature", temperature)
         }
@@ -912,6 +1022,45 @@ class WorkflowEngine(private val context: Context) {
             ?.takeIf { it.isNotBlank() }
             ?: json.optString("output")
                 .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callAnthropic(
+        endpoint: String,
+        key: String,
+        model: String,
+        systemPrompt: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(key.isNotBlank()) { "Anthropic API key is empty." }
+
+        val url = endpoint.ifBlank { "https://api.anthropic.com/v1/messages" }
+        val body = JSONObject().apply {
+            put("model", model.ifBlank { "claude-3-5-haiku-latest" })
+            put("max_tokens", 4096)
+            if (systemPrompt.isNotBlank()) put("system", systemPrompt)
+            put(
+                "messages",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", prompt)
+                )
+            )
+            put("temperature", temperature)
+        }
+
+        val headers = mapOf(
+            "x-api-key" to key,
+            "anthropic-version" to "2023-06-01"
+        )
+        val json = postJsonWithHeaders(url, "", body, headers)
+        return json.optJSONArray("content")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
                 .ifBlank { json.toString() }
     }
 
