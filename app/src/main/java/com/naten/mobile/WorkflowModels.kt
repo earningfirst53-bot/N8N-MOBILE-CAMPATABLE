@@ -288,6 +288,13 @@ fun FlowNode.ensureDefaultConfig() {
             config.put("key", "name")
             config.put("value", "NATEN")
         }
+        "Respond to Webhook" -> {
+            config.put("body", "Workflow completed")
+            config.put("statusCode", 200)
+        }
+        "Execute Sub-workflow" -> {
+            config.put("workflowId", "")
+        }
         "Log" -> config.put("message", "{{\$json}}")
         "Notification" -> {
             config.put("title", "NATEN")
