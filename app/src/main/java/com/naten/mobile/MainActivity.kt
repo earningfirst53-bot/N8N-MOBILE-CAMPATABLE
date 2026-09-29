@@ -50,9 +50,6 @@ class MainActivity : Activity() {
     private lateinit var activeSwitch: Switch
     private lateinit var editorFrame: FrameLayout
     private lateinit var breadcrumbView: TextView
-    private lateinit var breadcrumbView: TextView
-    private lateinit var breadcrumbView: TextView
-    private lateinit var breadcrumbView: TextView
     private var nodePanel: View? = null
 
     private var state = WorkflowState()
@@ -241,9 +238,6 @@ class MainActivity : Activity() {
             setOnClickListener { renameWorkflow() }
         }
         breadcrumbView = breadcrumb
-        breadcrumbView = breadcrumb
-        breadcrumbView = breadcrumb
-        breadcrumbView = breadcrumb
         topbar.addView(breadcrumb, LinearLayout.LayoutParams(0, -1, 1f))
 
         val editorTab = TextView(this).apply {
@@ -312,27 +306,6 @@ class MainActivity : Activity() {
             setStatus("Saved", "Workflow saved on this device.")
         }
         topbar.addView(save, LinearLayout.LayoutParams(-2, dp(34)).apply {
-            marginStart = dp(5)
-        })
-
-        val command = n8nChromeButton("⌘")
-        command.contentDescription = "Command center"
-        command.setOnClickListener { showCommandCenter() }
-        topbar.addView(command, LinearLayout.LayoutParams(dp(40), dp(34)).apply {
-            marginStart = dp(5)
-        })
-
-        val command = n8nChromeButton("⌘")
-        command.contentDescription = "Command center"
-        command.setOnClickListener { showCommandCenter() }
-        topbar.addView(command, LinearLayout.LayoutParams(dp(40), dp(34)).apply {
-            marginStart = dp(5)
-        })
-
-        val command = n8nChromeButton("⌘")
-        command.contentDescription = "Command center"
-        command.setOnClickListener { showCommandCenter() }
-        topbar.addView(command, LinearLayout.LayoutParams(dp(40), dp(34)).apply {
             marginStart = dp(5)
         })
 
@@ -1748,6 +1721,9 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
         private val nodeW = dpF(188f)
         private val nodeH = dpF(96f)
+        // Output handle is deliberately outside the node for reliable phone interaction.
+        private val outputGap = dpF(28f)
+        private val outputRadius = dpF(9f)
 
         private var scale = 1f
         private var offsetX = 48f
@@ -1823,7 +1799,7 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
             val minX = state.nodes.minOf { it.x }
             val minY = state.nodes.minOf { it.y }
-            val maxX = state.nodes.maxOf { it.x + nodeW }
+            val maxX = state.nodes.maxOf { it.x + nodeW + outputGap + outputRadius }
             val maxY = state.nodes.maxOf { it.y + nodeH }
 
             val contentW = (maxX - minX).coerceAtLeast(dpF(240f))
@@ -1858,7 +1834,7 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
             if (connectId != null) {
                 val source = state.nodes.firstOrNull { it.id == connectId }
                 if (source != null) {
-                    val sx = source.x + nodeW
+                    val sx = source.x + nodeW + outputGap
                     val sy = source.y + nodeH / 2f
                     val tx = (tempX - offsetX) / scale
                     val ty = (tempY - offsetY) / scale
@@ -1896,7 +1872,7 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
         }
 
         private fun drawEdge(canvas: Canvas, from: FlowNode, to: FlowNode, branch: String) {
-            val sx = from.x + nodeW
+            val sx = from.x + nodeW + outputGap
             val sy = from.y + nodeH / 2f
             val ex = to.x
             val ey = to.y + nodeH / 2f
@@ -1996,9 +1972,26 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
                 smallPaint
             )
 
-            smallPaint.color = Color.rgb(105, 108, 115)
-            smallPaint.textSize = dpF(9f)
-            canvas.drawText("#" + node.id, node.x + dpF(12f), node.y + nodeH - dpF(12f), smallPaint)
+            // Show the node number only inside a colored badge; do not render "#1", "#2", etc.
+            val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = accent
+                style = Paint.Style.FILL
+            }
+            val badgeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                textSize = dpF(8.5f)
+                typeface = Typeface.DEFAULT_BOLD
+                textAlign = Paint.Align.CENTER
+            }
+            val badgeCx = node.x + dpF(20f)
+            val badgeCy = node.y + nodeH - dpF(16f)
+            canvas.drawCircle(badgeCx, badgeCy, dpF(9f), badgePaint)
+            canvas.drawText(
+                node.id.toString(),
+                badgeCx,
+                badgeCy - (badgeTextPaint.ascent() + badgeTextPaint.descent()) / 2f,
+                badgeTextPaint
+            )
 
             val portFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = Color.rgb(25, 26, 29)
@@ -2013,8 +2006,37 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
             canvas.drawCircle(node.x, cy, dpF(5f), portFill)
             canvas.drawCircle(node.x, cy, dpF(5f), portStroke)
-            canvas.drawCircle(node.x + nodeW, cy, dpF(5f), portFill)
-            canvas.drawCircle(node.x + nodeW, cy, dpF(5f), portStroke)
+
+            // Extend the output connector and keep a visible "+" handle on every node.
+            val outputX = node.x + nodeW + outputGap
+            val connectorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(104, 107, 114)
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(1.5f)
+            }
+            canvas.drawLine(node.x + nodeW, cy, outputX, cy, connectorPaint)
+
+            val plusFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = accent
+                style = Paint.Style.FILL
+            }
+            val plusStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(230, 232, 236)
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(1.2f)
+            }
+            canvas.drawCircle(outputX, cy, outputRadius, plusFill)
+            canvas.drawCircle(outputX, cy, outputRadius, plusStroke)
+
+            val plusPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.WHITE
+                style = Paint.Style.STROKE
+                strokeWidth = dpF(1.8f)
+                strokeCap = Paint.Cap.ROUND
+            }
+            val plusArm = dpF(4f)
+            canvas.drawLine(outputX - plusArm, cy, outputX + plusArm, cy, plusPaint)
+            canvas.drawLine(outputX, cy - plusArm, outputX, cy + plusArm, plusPaint)
         }
 
         private fun drawEllipsized(
@@ -2052,16 +2074,18 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
                     val logicalX = (event.x - offsetX) / scale
                     val logicalY = (event.y - offsetY) / scale
-                    val hit = findNode(logicalX, logicalY)
 
-                    if (hit != null && isOutput(hit, logicalX, logicalY)) {
-                        connectId = hit.id
+                    val outputHit = findOutput(logicalX, logicalY)
+                    if (outputHit != null) {
+                        connectId = outputHit.id
                         tempX = event.x
                         tempY = event.y
-                        selectedId = hit.id
+                        selectedId = outputHit.id
                         invalidate()
                         return true
                     }
+
+                    val hit = findNode(logicalX, logicalY)
 
                     dragId = hit?.id
                     selectedId = hit?.id
@@ -2145,10 +2169,13 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
         }
 
         private fun isOutput(node: FlowNode, x: Float, y: Float): Boolean {
-            val hx = node.x + nodeW
+            val hx = node.x + nodeW + outputGap
             val hy = node.y + nodeH / 2f
-            return distance(x, y, hx, hy) <= dpF(24f)
+            return distance(x, y, hx, hy) <= dpF(18f)
         }
+
+        private fun findOutput(x: Float, y: Float): FlowNode? =
+            state.nodes.asReversed().firstOrNull { isOutput(it, x, y) }
 
         private fun findInput(x: Float, y: Float): FlowNode? =
             state.nodes.asReversed().firstOrNull {
