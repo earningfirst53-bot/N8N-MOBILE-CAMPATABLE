@@ -61,10 +61,22 @@ class MainActivity : Activity() {
         state.nodes.forEach { it.ensureDefaultConfig() }
         buildUi()
         refreshUi()
+        requestNotificationPermission()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+    }
+
+    private fun requestNotificationPermission() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                REQ_NOTIFICATIONS
+            )
+        }
     }
 
     private fun buildUi() {
@@ -1239,5 +1251,6 @@ Files are stored in this app's private NATEN storage area.
     companion object {
         private const val REQ_IMPORT = 7401
         private const val REQ_EXPORT = 7402
+        private const val REQ_NOTIFICATIONS = 7403
     }
 }
