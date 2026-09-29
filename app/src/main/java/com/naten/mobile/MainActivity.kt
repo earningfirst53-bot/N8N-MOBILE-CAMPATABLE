@@ -24,6 +24,7 @@ import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
@@ -66,135 +67,289 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(244, 246, 249))
+        window.statusBarColor = Color.rgb(14, 15, 17)
+        window.navigationBarColor = Color.rgb(14, 15, 17)
+
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(19, 20, 23))
         }
 
-        val toolbar = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(7))
-            setBackgroundColor(Color.WHITE)
+        val workspace = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
         }
+        root.addView(workspace, FrameLayout.LayoutParams(-1, -1))
 
-        val titleRow = LinearLayout(this).apply {
+        val sidebar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(12), dp(10), dp(10))
+            setBackgroundColor(Color.rgb(14, 15, 17))
+        }
+        workspace.addView(sidebar, LinearLayout.LayoutParams(dp(178), -1))
+
+        val brandRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(5), dp(4), dp(5), dp(16))
+        }
+        brandRow.addView(TextView(this).apply {
+            text = "n8n"
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(42), -2))
+        brandRow.addView(TextView(this).apply {
+            text = "NATEN"
+            textSize = 12f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(150, 154, 163))
+        })
+        sidebar.addView(brandRow)
+
+        fun nav(label: String, active: Boolean = false, action: (() -> Unit)? = null) {
+            val item = TextView(this).apply {
+                text = label
+                textSize = 13f
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), 0, dp(8), 0)
+                setTextColor(if (active) Color.WHITE else Color.rgb(164, 168, 178))
+                background = rounded(
+                    if (active) Color.rgb(38, 40, 45) else Color.TRANSPARENT,
+                    8f,
+                    Color.TRANSPARENT,
+                    0
+                )
+                isClickable = action != null
+                setOnClickListener { action?.invoke() }
+            }
+            sidebar.addView(item, LinearLayout.LayoutParams(-1, dp(38)).apply {
+                bottomMargin = dp(3)
+            })
         }
 
-        nameView = TextView(this).apply {
-            text = state.name
-            textSize = 20f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(25, 29, 36))
-            setPadding(0, 0, dp(8), 0)
+        nav("⌂   Overview", action = { showMoreMenu() })
+        nav("▦   Workflows", active = true, action = { showWorkflows() })
+        nav("▤   Credentials", action = { showCredentials() })
+        nav("◷   Executions", action = { showHistory() })
+        nav("☆   Templates", action = {
+            Toast.makeText(this, "Templates are on the roadmap for this editor pass.", Toast.LENGTH_SHORT).show()
+        })
+        nav("◇   Variables", action = {
+            Toast.makeText(this, "Workflow variables are available through node configuration.", Toast.LENGTH_SHORT).show()
+        })
+
+        sidebar.addView(View(this), LinearLayout.LayoutParams(-1, 0, 1f))
+        nav("⚙   Settings", action = { showMoreMenu() })
+
+        val editor = FrameLayout(this)
+        workspace.addView(editor, LinearLayout.LayoutParams(0, -1, 1f))
+
+        val topbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(10), 0)
+            setBackgroundColor(Color.rgb(29, 30, 33))
+        }
+
+        val breadcrumb = TextView(this).apply {
+            text = "Personal  /  " + state.name
+            textSize = 13f
+            setTextColor(Color.rgb(207, 209, 215))
             setOnClickListener { renameWorkflow() }
         }
-        titleRow.addView(nameView, LinearLayout.LayoutParams(0, dp(42), 1f))
+        topbar.addView(breadcrumb, LinearLayout.LayoutParams(0, -1, 1f))
 
-        val workflowsButton = toolbarButton("Workflows")
-        workflowsButton.setOnClickListener { showWorkflows() }
-        titleRow.addView(workflowsButton)
+        val editorTab = TextView(this).apply {
+            text = "Editor"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTypeface(Typeface.DEFAULT_BOLD)
+            setTextColor(Color.WHITE)
+            background = rounded(Color.rgb(56, 57, 62), 7f, Color.TRANSPARENT, 0)
+            setPadding(dp(14), 0, dp(14), 0)
+        }
+        topbar.addView(editorTab, LinearLayout.LayoutParams(-2, dp(34)).apply {
+            marginEnd = dp(3)
+        })
+
+        val executionsTab = TextView(this).apply {
+            text = "Executions"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(155, 158, 166))
+            setOnClickListener { showHistory() }
+            setPadding(dp(12), 0, dp(12), 0)
+        }
+        topbar.addView(executionsTab, LinearLayout.LayoutParams(-2, dp(34)))
+
+        val evaluationsTab = TextView(this).apply {
+            text = "Evaluations"
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(155, 158, 166))
+            setOnClickListener { showHistory() }
+            setPadding(dp(12), 0, dp(12), 0)
+        }
+        topbar.addView(evaluationsTab, LinearLayout.LayoutParams(-2, dp(34)))
 
         activeSwitch = Switch(this).apply {
             text = "Active"
-            textSize = 12f
+            textSize = 11f
+            setTextColor(Color.rgb(190, 192, 198))
             isChecked = state.active
             setOnCheckedChangeListener { _, checked ->
                 state.active = checked
                 WorkflowStore.save(this@MainActivity, state)
                 syncAutomation()
-                if (checked) {
-                    setStatus(
-                        "Automation active",
-                        "Scheduled workflows can run while NATEN is closed. Webhook workflows keep a background listener."
-                    )
-                } else {
-                    setStatus("Automation inactive", "This workflow will not run automatically.")
-                }
+                setStatus(
+                    if (checked) "Active" else "Inactive",
+                    if (checked) "Background automation enabled for this workflow."
+                    else "Background automation disabled for this workflow."
+                )
             }
         }
-        titleRow.addView(activeSwitch)
-        toolbar.addView(titleRow)
+        topbar.addView(activeSwitch, LinearLayout.LayoutParams(-2, dp(44)).apply {
+            marginStart = dp(8)
+        })
 
-        val actionRow = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-        }
-        val actions = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
+        val share = n8nChromeButton("Share")
+        share.setOnClickListener { shareWorkflow() }
+        topbar.addView(share, LinearLayout.LayoutParams(-2, dp(34)).apply {
+            marginStart = dp(5)
+        })
 
-        val add = toolbarButton("+ Add Node")
-        add.setOnClickListener { showNodeLibrary() }
-        val save = toolbarButton("Save")
+        val save = n8nChromeButton("Save")
         save.setOnClickListener {
             WorkflowStore.save(this, state)
             syncAutomation()
-            setStatus("Saved", "Workflow stored on this device.")
+            setStatus("Saved", "Workflow saved on this device.")
         }
-        val run = toolbarButton("Run")
-        run.setOnClickListener { runWorkflow() }
-        val history = toolbarButton("History")
-        history.setOnClickListener { showHistory() }
-        val more = toolbarButton("More")
+        topbar.addView(save, LinearLayout.LayoutParams(-2, dp(34)).apply {
+            marginStart = dp(5)
+        })
+
+        val more = n8nChromeButton("⋯")
         more.setOnClickListener { showMoreMenu() }
+        topbar.addView(more, LinearLayout.LayoutParams(dp(40), dp(34)).apply {
+            marginStart = dp(5)
+        })
 
-        actions.addView(add)
-        actions.addView(save)
-        actions.addView(run)
-        actions.addView(history)
-        actions.addView(more)
+        editor.addView(topbar, FrameLayout.LayoutParams(-1, dp(56), Gravity.TOP))
 
-        listOf(
-            "Manual Trigger",
-            "Schedule Trigger",
-            "HTTP Request",
-            "IF",
-            "AI Text",
-            "Notification"
-        ).forEach { type ->
-            val quick = toolbarButton("+ " + type.removeSuffix(" Trigger"))
-            quick.setOnClickListener { addNode(type) }
-            actions.addView(quick)
+        val canvasHost = FrameLayout(this).apply {
+            setBackgroundColor(Color.rgb(25, 26, 29))
         }
-
-        actionRow.addView(actions)
-        toolbar.addView(actionRow)
-
-        val canvasHost = FrameLikeScroll(this)
         canvas = WorkflowCanvas(this)
-        canvasHost.addView(canvas)
-        root.addView(
-            canvasHost,
-            LinearLayout.LayoutParams(-1, 0, 1f).apply {
-                setMargins(dp(8), dp(8), dp(8), dp(8))
+        canvasHost.addView(canvas, FrameLayout.LayoutParams(-1, -1))
+
+        val addNode = TextView(this).apply {
+            text = "+"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(244, 246, 249))
+            background = rounded(Color.rgb(255, 109, 90), 18f, Color.TRANSPARENT, 0)
+            elevation = dpF(8f)
+            setOnClickListener { showNodeLibrary() }
+        }
+        canvasHost.addView(
+            addNode,
+            FrameLayout.LayoutParams(dp(46), dp(46), Gravity.TOP or Gravity.END).apply {
+                topMargin = dp(18)
+                rightMargin = dp(18)
             }
         )
 
-        val bottom = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(11), dp(8), dp(11), dp(10))
-            setBackgroundColor(Color.WHITE)
+        val canvasTools = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(5), dp(5), dp(5), dp(5))
+            background = rounded(Color.rgb(38, 39, 43), 9f, Color.rgb(65, 67, 73), 1)
         }
 
-        statusView = TextView(this).apply {
+        fun canvasTool(label: String, action: () -> Unit): TextView = TextView(this).apply {
+            text = label
             textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(226, 228, 232))
+            background = rounded(Color.TRANSPARENT, 7f, Color.TRANSPARENT, 0)
+            setOnClickListener { action() }
+        }
+
+        val fit = canvasTool("⌗") { canvas.fitView() }
+        val zoomOut = canvasTool("−") { canvas.zoomBy(0.82f) }
+        val zoomIn = canvasTool("+") { canvas.zoomBy(1.22f) }
+        val undo = canvasTool("↶") { Toast.makeText(this, "Undo is reserved for the next history layer.", Toast.LENGTH_SHORT).show() }
+        val redo = canvasTool("↷") { Toast.makeText(this, "Redo is reserved for the next history layer.", Toast.LENGTH_SHORT).show() }
+
+        listOf(fit, zoomOut, zoomIn, undo, redo).forEach { v ->
+            canvasTools.addView(v, LinearLayout.LayoutParams(dp(38), dp(34)))
+        }
+
+        canvasHost.addView(
+            canvasTools,
+            FrameLayout.LayoutParams(-2, dp(44), Gravity.BOTTOM or Gravity.START).apply {
+                leftMargin = dp(16)
+                bottomMargin = dp(16)
+            }
+        )
+
+        editor.addView(
+            canvasHost,
+            FrameLayout.LayoutParams(-1, 0).apply {
+                topMargin = dp(56)
+                bottomMargin = dp(58)
+                gravity = Gravity.TOP
+            }
+        )
+
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            setBackgroundColor(Color.rgb(29, 30, 33))
+        }
+
+        val bottomMeta = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        statusView = TextView(this).apply {
+            textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(Color.rgb(40, 44, 51))
+            setTextColor(Color.rgb(225, 226, 231))
         }
         logView = TextView(this).apply {
-            textSize = 12f
-            setTextColor(Color.rgb(84, 90, 100))
-            setPadding(0, dp(3), 0, 0)
-            maxLines = 6
+            textSize = 10f
+            setTextColor(Color.rgb(146, 149, 157))
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
+        bottomMeta.addView(statusView)
+        bottomMeta.addView(logView)
+        bottomBar.addView(bottomMeta, LinearLayout.LayoutParams(0, -2, 1f))
 
-        bottom.addView(statusView)
-        bottom.addView(logView)
+        val run = TextView(this).apply {
+            text = "⚗  Execute workflow"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE)
+            background = rounded(Color.rgb(255, 109, 90), 7f, Color.TRANSPARENT, 0)
+            setPadding(dp(18), 0, dp(18), 0)
+            setOnClickListener { runWorkflow() }
+        }
+        bottomBar.addView(run, LinearLayout.LayoutParams(-2, dp(40)))
 
-        root.addView(toolbar)
-        root.addView(bottom)
+        editor.addView(bottomBar, FrameLayout.LayoutParams(-1, dp(58), Gravity.BOTTOM))
 
         setContentView(root)
+    }
+
+    private fun shareWorkflow() {
+        val content = n8nJson().toString(2)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_TEXT, content)
+            putExtra(Intent.EXTRA_SUBJECT, state.name)
+        }
+        startActivity(Intent.createChooser(intent, "Share workflow"))
     }
 
     private fun addNode(type: String) {
@@ -1308,6 +1463,16 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
         layoutParams = LinearLayout.LayoutParams(-2, dp(38)).apply {
             marginStart = dp(5)
         }
+    }
+
+    private fun n8nChromeButton(label: String): TextView = TextView(this).apply {
+        text = label
+        textSize = 12f
+        gravity = Gravity.CENTER
+        setTextColor(Color.rgb(222, 224, 229))
+        background = rounded(Color.rgb(39, 40, 44), 7f, Color.rgb(73, 75, 81), 1)
+        setPadding(dp(11), 0, dp(11), 0)
+        isClickable = true
     }
 
     private fun rounded(fill: Int, radius: Float, stroke: Int, width: Int): GradientDrawable =
