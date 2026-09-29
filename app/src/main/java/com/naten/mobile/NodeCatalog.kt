@@ -12,6 +12,7 @@ object NodeCatalog {
         NodeDefinition("Manual Trigger", "Triggers", "Start manually from Run"),
         NodeDefinition("Schedule Trigger", "Triggers", "Run on a time interval"),
         NodeDefinition("Webhook Trigger", "Triggers", "Receive an HTTP request"),
+        NodeDefinition("Respond to Webhook", "Webhooks", "Return a custom webhook response"),
         NodeDefinition("Error Trigger", "Triggers", "Trigger an error workflow"),
         NodeDefinition("Chat Trigger", "Triggers", "Receive chat-style webhook input"),
         NodeDefinition("HTTP Request", "Core", "Call any HTTP API"),
