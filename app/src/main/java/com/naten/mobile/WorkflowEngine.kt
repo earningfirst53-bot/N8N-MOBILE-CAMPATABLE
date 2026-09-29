@@ -599,33 +599,36 @@ class WorkflowEngine(private val context: Context) {
             }
 
             "AI Text", "AI Agent" -> {
-                val provider = c.optString("provider", "OpenAI-compatible")
+                val provider = c.optString("provider", "OpenAI")
                 val prompt = render(c.optString("prompt"), input, variables)
                 val credentialName = c.optString("credentialName").trim()
                 val apiKey = c.optString("apiKey").ifBlank {
                     if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
                 }
-                val answer = when (provider.lowercase(Locale.US)) {
+                val normalizedProvider = provider.lowercase(Locale.US)
+                val endpoint = c.optString("endpoint").ifBlank { defaultAiEndpoint(normalizedProvider) }
+                val model = c.optString("model").ifBlank { defaultAiModel(normalizedProvider) }
+                val answer = when (normalizedProvider) {
                     "gemini" -> callGemini(
-                        c.optString("endpoint"),
+                        endpoint,
                         apiKey,
-                        c.optString("model"),
+                        model,
                         c.optString("systemPrompt"),
                         prompt,
                         c.optDouble("temperature", 0.4)
                     )
                     "anthropic", "claude" -> callAnthropic(
-                        c.optString("endpoint"),
+                        endpoint,
                         apiKey,
-                        c.optString("model"),
+                        model,
                         c.optString("systemPrompt"),
                         prompt,
                         c.optDouble("temperature", 0.4)
                     )
                     else -> callOpenAiCompatible(
-                        c.optString("endpoint"),
+                        endpoint,
                         apiKey,
-                        c.optString("model"),
+                        model,
                         c.optString("systemPrompt"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -710,8 +713,17 @@ class WorkflowEngine(private val context: Context) {
         report: (String) -> Unit
     ): NodeResult {
         val method = c.optString("method", "GET").uppercase(Locale.US)
-        val urlText = render(c.optString("url"), input, variables)
+        var urlText = render(c.optString("url"), input, variables)
         require(urlText.isNotBlank()) { "HTTP node needs a URL." }
+
+        val queryParams = parsePairs(render(c.optString("queryParams"), input, variables))
+        if (queryParams.isNotEmpty()) {
+            val separator = if (urlText.contains("?")) "&" else "?"
+            urlText += separator + queryParams.joinToString("&") { pair ->
+                java.net.URLEncoder.encode(pair.first, "UTF-8") + "=" +
+                    java.net.URLEncoder.encode(pair.second, "UTF-8")
+            }
+        }
 
         val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
             requestMethod = method
@@ -750,10 +762,13 @@ class WorkflowEngine(private val context: Context) {
 
         val code = connection.responseCode
         val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val maxBytes = c.optInt("maxResponseBytes", 2_000_000).coerceIn(1_024, 10_000_000)
         val body = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
+            val bytes = it.readBytes()
+            if (bytes.size > maxBytes) {
+                throw IllegalStateException("HTTP response exceeded " + maxBytes + " bytes")
             }
+            String(bytes, Charsets.UTF_8)
         } ?: ""
         connection.disconnect()
 
@@ -991,6 +1006,22 @@ class WorkflowEngine(private val context: Context) {
         }
 
         return result
+    }
+
+    private fun defaultAiEndpoint(provider: String): String = when (provider) {
+        "gemini" -> "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        "anthropic", "claude" -> "https://api.anthropic.com/v1/messages"
+        else -> "https://api.openai.com/v1/chat/completions"
+    }
+
+    private fun defaultAiModel(provider: String): String = when (provider) {
+        "gemini" -> "gemini-2.5-flash"
+        "anthropic", "claude" -> "claude-3-5-haiku-latest"
+        "openrouter" -> "openai/gpt-4o-mini"
+        "groq" -> "llama-3.3-70b-versatile"
+        "deepseek" -> "deepseek-chat"
+        "mistral" -> "mistral-small-latest"
+        else -> "gpt-4o-mini"
     }
 
     private fun callOpenAiCompatible(
