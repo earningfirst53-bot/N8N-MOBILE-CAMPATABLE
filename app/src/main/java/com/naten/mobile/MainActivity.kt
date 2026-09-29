@@ -262,6 +262,8 @@ class MainActivity : Activity() {
         "Gmail" -> "Gmail via API"
         "No Operation" -> "No operation"
         "Stop / Error" -> "Stop / error"
+        "Respond to Webhook" -> "Webhook response"
+        "Execute Sub-workflow" -> "Run another workflow"
         else -> type
     }
 
@@ -530,6 +532,14 @@ class MainActivity : Activity() {
                 fields["temperature"] = textField("temperature", "Temperature")
             }
             "Log", "Stop / Error" -> fields["message"] = textField("message", "Message", true)
+            "Respond to Webhook" -> {
+                fields["body"] = textField("body", "Response body", true)
+                fields["statusCode"] = textField("statusCode", "HTTP status code")
+            }
+            "Execute Sub-workflow" -> {
+                fields["workflowId"] = textField("workflowId", "Target workflow ID")
+                label("Use Workflows to find the target workflow ID. The child workflow receives the current JSON input.")
+            }
             else -> {
                 label("Advanced configuration JSON")
                 fields["__json"] = textField("__json", "JSON", true).also {
@@ -791,7 +801,8 @@ class MainActivity : Activity() {
                 (if (o.optBoolean("success")) "OK" else "FAIL") +
                     " • " + o.optString("workflow") +
                     "\n" + o.optString("message") +
-                    "\n" + o.optLong("durationMs") + " ms"
+                    "\n" + o.optLong("durationMs") + " ms" +
+                    "\nOutput: " + o.optString("output", "").take(700)
             )
         }
 
@@ -996,6 +1007,8 @@ class MainActivity : Activity() {
         "Switch" -> "n8n-nodes-base.switch"
         "Wait" -> "n8n-nodes-base.wait"
         "Code" -> "n8n-nodes-base.code"
+        "Respond to Webhook" -> "n8n-nodes-base.respondToWebhook"
+        "Execute Sub-workflow" -> "n8n-nodes-base.executeWorkflow"
         else -> "n8n-nodes-base.noOp"
     }
 
@@ -1066,6 +1079,8 @@ class MainActivity : Activity() {
             ".switch" in value -> "Switch"
             ".wait" in value -> "Wait"
             ".code" in value -> "Code"
+            "respondtowebhook" in value -> "Respond to Webhook"
+            "executeworkflow" in value || "subworkflow" in value -> "Execute Sub-workflow"
             else -> "Generic API"
         }
     }
