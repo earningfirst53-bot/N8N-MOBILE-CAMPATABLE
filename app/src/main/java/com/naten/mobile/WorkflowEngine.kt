@@ -61,10 +61,12 @@ class WorkflowEngine(private val context: Context) {
                 val byId = state.nodes.associateBy { it.id }
                 val outgoing = state.edges.groupBy { it.from }
 
-                val preferred = if (background) {
-                    state.nodes.filter { it.type == "Schedule Trigger" }
-                } else {
-                    state.nodes.filter { it.type == "Manual Trigger" || it.type == "Webhook Trigger" || it.type == "Chat Trigger" }
+                val preferred = when {
+                    input != null -> state.nodes.filter {
+                        it.type == "Webhook Trigger" || it.type == "Chat Trigger"
+                    }
+                    background -> state.nodes.filter { it.type == "Schedule Trigger" }
+                    else -> state.nodes.filter { it.type == "Manual Trigger" }
                 }
 
                 val starts = preferred.ifEmpty {
