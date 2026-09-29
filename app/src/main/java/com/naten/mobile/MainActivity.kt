@@ -57,10 +57,12 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        state = WorkflowJson.load(this) ?: WorkflowState()
+        val saved = WorkflowJson.load(this)
+        state = saved ?: starterWorkflow()
         state.nodes.forEach { it.ensureDefaultConfig() }
         buildUi()
         refreshUi()
+        WorkflowJson.save(this, state)
         requestNotificationPermission()
     }
 
@@ -232,6 +234,27 @@ class MainActivity : Activity() {
     }
 
     private fun nextId(): Int = (state.nodes.maxOfOrNull { it.id } ?: 0) + 1
+
+    private fun starterWorkflow(): WorkflowState {
+        val s = WorkflowState(name = "NATEN Starter")
+        val trigger = FlowNode(1, "Manual Trigger", "Press Run", dpF(24), dpF(20))
+        val set = FlowNode(2, "Edit Fields", "Create message", dpF(24), dpF(132))
+        set.config.put("fields", "message=Hello from NATEN")
+        val notify = FlowNode(3, "Notification", "Show phone notification", dpF(24), dpF(244))
+        notify.config.put("title", "NATEN")
+        notify.config.put("message", "{{\$json.message}}")
+        val log = FlowNode(4, "Log", "Write execution log", dpF(24), dpF(356))
+        log.config.put("message", "{{\$json}}")
+        s.nodes.addAll(listOf(trigger, set, notify, log))
+        s.edges.addAll(
+            listOf(
+                FlowEdge(1, 2),
+                FlowEdge(2, 3),
+                FlowEdge(3, 4)
+            )
+        )
+        return s
+    }
 
     private fun defaultTitle(type: String): String = when (type) {
         "Manual Trigger" -> "When I press Run"
