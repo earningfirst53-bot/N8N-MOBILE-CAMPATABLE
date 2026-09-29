@@ -24,6 +24,7 @@ object NodeCatalog {
         NodeDefinition("Merge", "Flow", "Join workflow paths"),
         NodeDefinition("Loop Over Items", "Flow", "Process items in batches"),
         NodeDefinition("Wait", "Flow", "Pause execution"),
+        NodeDefinition("Execute Sub-workflow", "Flow", "Run another NATEN workflow"),
         NodeDefinition("Limit", "Data", "Limit the number of items"),
         NodeDefinition("Remove Duplicates", "Data", "Remove duplicate items"),
         NodeDefinition("Rename Keys", "Data", "Rename JSON fields"),
