@@ -61,9 +61,17 @@ class ScheduleReceiver : BroadcastReceiver() {
         val state = WorkflowJson.load(context) ?: return
         if (!state.active) return
         if (state.nodes.none { it.type == "Schedule Trigger" }) return
+
+        val pending = goAsync()
         WorkflowEngine(context.applicationContext).run(
             state = state,
-            listener = null,
+            listener = object : ExecutionListener {
+                override fun onStatus(message: String) = Unit
+                override fun onLog(message: String) = Unit
+                override fun onFinished(success: Boolean, message: String) {
+                    pending.finish()
+                }
+            },
             background = true
         )
     }
