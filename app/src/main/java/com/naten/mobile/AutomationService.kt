@@ -83,7 +83,18 @@ class AutomationService : Service() {
                         "NATEN • " + state.name,
                         if (success) message else "Failed: " + message
                     )
-                    stopSelf(startId)
+
+                    val keepWebhook = WorkflowStore.list(this@AutomationService).any { workflow ->
+                        workflow.active && workflow.nodes.any {
+                            it.type == "Webhook Trigger" || it.type == "Chat Trigger"
+                        }
+                    }
+
+                    if (keepWebhook) {
+                        startWebhookServer()
+                    } else {
+                        stopSelf(startId)
+                    }
                 }
             },
             background = true
