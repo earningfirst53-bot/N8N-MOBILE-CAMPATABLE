@@ -652,7 +652,7 @@ class MainActivity : Activity() {
                     }
                 }
 
-                override fun onFinished(success: Boolean, message: String) {
+                override fun onFinished(success: Boolean, message: String, output: JSONObject) {
                     runOnUiThread {
                         statusView.text = if (success) "Completed" else "Failed"
                         logLines.add(message)
