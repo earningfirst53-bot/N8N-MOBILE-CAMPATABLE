@@ -610,6 +610,7 @@ class WorkflowEngine(private val context: Context) {
                         c.optString("endpoint"),
                         apiKey,
                         c.optString("model"),
+                        c.optString("systemPrompt"),
                         prompt,
                         c.optDouble("temperature", 0.4)
                     )
@@ -633,6 +634,9 @@ class WorkflowEngine(private val context: Context) {
                 NodeResult(JSONObject(input.toString()).apply {
                     put("text", answer)
                     put("ai", answer)
+                    if (c.optString("responseFormat", "text").equals("json", true)) {
+                        runCatching { put("aiJson", JSONObject(answer)) }
+                    }
                 })
             }
 
@@ -843,12 +847,11 @@ class WorkflowEngine(private val context: Context) {
         val requestConfig = JSONObject().apply {
             put("method", "GET")
             put("url", url(path, params))
-            if (accessToken.isNotBlank()) {
-                put("headers", "Authorization: Bearer " + accessToken)
-            } else {
-                require(apiKey.isNotBlank()) { "YouTube API key or OAuth access token is required." }
-                val base = optString("url")
-            }
+            put(
+                "headers",
+                if (accessToken.isNotBlank()) "Authorization: Bearer " + accessToken else ""
+            )
+            put("body", "")
         }
 
         var finalUrl = requestConfig.optString("url")
@@ -1068,6 +1071,7 @@ class WorkflowEngine(private val context: Context) {
         endpoint: String,
         key: String,
         model: String,
+        systemPrompt: String,
         prompt: String,
         temperature: Double
     ): String {
@@ -1088,7 +1092,10 @@ class WorkflowEngine(private val context: Context) {
                 JSONArray().put(
                     JSONObject().put(
                         "parts",
-                        JSONArray().put(JSONObject().put("text", prompt))
+                        JSONArray().put(JSONObject().put(
+                            "text",
+                            (if (systemPrompt.isNotBlank()) systemPrompt + "\n\n" else "") + prompt
+                        ))
                     )
                 )
             )
