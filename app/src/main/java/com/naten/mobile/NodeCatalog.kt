@@ -62,6 +62,7 @@ object NodeCatalog {
         NodeDefinition("Google Calendar", "Integrations", "Google Calendar API", defaultUrl = "https://www.googleapis.com/calendar/v3/calendars"),
         NodeDefinition("Google Docs", "Integrations", "Google Docs API", defaultUrl = "https://docs.googleapis.com/v1/documents"),
         NodeDefinition("Google Slides", "Integrations", "Google Slides API", defaultUrl = "https://slides.googleapis.com/v1/presentations"),
+        NodeDefinition("YouTube", "Integrations", "YouTube Data API v3 for channels, videos and search", defaultUrl = "https://www.googleapis.com/youtube/v3/"),
         NodeDefinition("Telegram", "Integrations", "Telegram Bot API", defaultUrl = "https://api.telegram.org/"),
         NodeDefinition("Slack", "Integrations", "Slack Web API", defaultUrl = "https://slack.com/api/"),
         NodeDefinition("Discord", "Integrations", "Discord HTTP API", defaultUrl = "https://discord.com/api/v10/"),
