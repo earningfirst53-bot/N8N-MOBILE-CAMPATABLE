@@ -35,7 +35,7 @@ class AutomationService : Service() {
         startAsForeground("NATEN automation active", "Background automation is running")
 
         when (intent?.action) {
-            ACTION_RUN -> {
+            null, ACTION_START -> {
                 val workflowId = WorkflowScheduler.workflowId(intent)
                 val state = workflowId?.let { WorkflowStore.load(this, it) }
                     ?: WorkflowStore.loadCurrent(this)
@@ -48,7 +48,7 @@ class AutomationService : Service() {
                 runWorkflowAndStop(state, startId)
             }
 
-            ACTION_START -> {
+            null, ACTION_START -> {
                 val webhooks = WorkflowStore.list(this).filter { state ->
                     state.active && state.nodes.any {
                         it.type == "Webhook Trigger" || it.type == "Chat Trigger"
@@ -62,7 +62,8 @@ class AutomationService : Service() {
             }
         }
 
-        return START_NOT_STICKY
+        val keepAlive = webServer != null
+        return if (keepAlive) START_STICKY else START_NOT_STICKY
     }
 
     private fun runWorkflowAndStop(state: WorkflowState, startId: Int) {
@@ -187,6 +188,7 @@ class AutomationService : Service() {
             val latch = CountDownLatch(1)
             var success = false
             var message = "Execution started"
+            var output = JSONObject()
 
             engine.runWithInput(
                 state = matched,
@@ -216,6 +218,7 @@ class AutomationService : Service() {
                     put("workflow", matched.name)
                     put("success", success)
                     put("message", message)
+                    put("output", output)
                 }
             )
         }
