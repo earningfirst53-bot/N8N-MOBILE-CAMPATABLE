@@ -293,7 +293,7 @@ class MainActivity : Activity() {
 
         editor.addView(
             canvasHost,
-            FrameLayout.LayoutParams(-1, 0).apply {
+            FrameLayout.LayoutParams(-1, -1).apply {
                 topMargin = dp(56)
                 bottomMargin = dp(58)
                 gravity = Gravity.TOP
@@ -1512,179 +1512,281 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
     }
 
     inner class WorkflowCanvas(context: Context) : View(context) {
-        val nodes get() = state.nodes
         var selectedId: Int? = null
 
-        private val nodeW = dpF(182)
-        private val nodeH = dpF(92)
+        private val nodeW = dpF(188f)
+        private val nodeH = dpF(96f)
+
+        private var scale = 1f
+        private var offsetX = 48f
+        private var offsetY = 42f
+
         private var dragId: Int? = null
         private var connectId: Int? = null
         private var moved = false
+        private var panning = false
         private var downX = 0f
         private var downY = 0f
+        private var lastX = 0f
+        private var lastY = 0f
         private var tempX = 0f
         private var tempY = 0f
 
         private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(222, 226, 233)
+            color = Color.rgb(47, 49, 53)
         }
         private val edgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(149, 158, 171)
-            strokeWidth = dpF(2.4f)
+            color = Color.rgb(117, 121, 129)
+            strokeWidth = dpF(1.8f)
             style = Paint.Style.STROKE
         }
         private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val nodeFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(34, 35, 38)
+            style = Paint.Style.FILL
+        }
+        private val nodeStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(88, 91, 98)
+            style = Paint.Style.STROKE
+            strokeWidth = dpF(1f)
+        }
+
+        private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val oldScale = scale
+                val next = (scale * detector.scaleFactor).coerceIn(0.5f, 1.65f)
+                if (next == oldScale) return true
+
+                val logicalFocusX = (detector.focusX - offsetX) / oldScale
+                val logicalFocusY = (detector.focusY - offsetY) / oldScale
+                scale = next
+                offsetX = detector.focusX - logicalFocusX * scale
+                offsetY = detector.focusY - logicalFocusY * scale
+                invalidate()
+                return true
+            }
+        })
 
         init {
             isClickable = true
+            setBackgroundColor(Color.rgb(25, 26, 29))
             setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            post { fitView() }
         }
 
-        override fun onDraw(c: Canvas) {
-            c.drawColor(Color.rgb(244, 246, 249))
-            drawGrid(c)
+        fun zoomBy(factor: Float) {
+            val centerX = width / 2f
+            val centerY = height / 2f
+            val logicalX = (centerX - offsetX) / scale
+            val logicalY = (centerY - offsetY) / scale
+            scale = (scale * factor).coerceIn(0.5f, 1.65f)
+            offsetX = centerX - logicalX * scale
+            offsetY = centerY - logicalY * scale
+            invalidate()
+        }
+
+        fun fitView() {
+            if (width <= 0 || height <= 0 || state.nodes.isEmpty()) return
+
+            val minX = state.nodes.minOf { it.x }
+            val minY = state.nodes.minOf { it.y }
+            val maxX = state.nodes.maxOf { it.x + nodeW }
+            val maxY = state.nodes.maxOf { it.y + nodeH }
+
+            val contentW = (maxX - minX).coerceAtLeast(dpF(240f))
+            val contentH = (maxY - minY).coerceAtLeast(dpF(160f))
+            val targetScale = minOf(
+                (width - dpF(90f)) / contentW,
+                (height - dpF(90f)) / contentH
+            ).coerceIn(0.5f, 1.25f)
+
+            scale = targetScale
+            offsetX = (width - contentW * scale) / 2f - minX * scale
+            offsetY = (height - contentH * scale) / 2f - minY * scale
+            invalidate()
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            canvas.drawColor(Color.rgb(25, 26, 29))
+
+            canvas.save()
+            drawGrid(canvas)
+
+            canvas.save()
+            canvas.translate(offsetX, offsetY)
+            canvas.scale(scale, scale)
 
             state.edges.forEach { edge ->
-                val a = state.nodes.firstOrNull { it.id == edge.from }
-                val b = state.nodes.firstOrNull { it.id == edge.to }
-                if (a != null && b != null) drawEdge(c, a, b, edge.branch)
+                val from = state.nodes.firstOrNull { it.id == edge.from }
+                val to = state.nodes.firstOrNull { it.id == edge.to }
+                if (from != null && to != null) drawEdge(canvas, from, to, edge.branch)
             }
 
             if (connectId != null) {
-                val a = state.nodes.firstOrNull { it.id == connectId }
-                if (a != null) {
-                    val p = Path()
-                    val sx = a.x + nodeW
-                    val sy = a.y + nodeH / 2
-                    p.moveTo(sx, sy)
-                    val mid = (sx + tempX) / 2
-                    p.cubicTo(mid, sy, mid, tempY, tempX, tempY)
-                    edgePaint.color = Color.rgb(70, 103, 214)
-                    c.drawPath(p, edgePaint)
-                    edgePaint.color = Color.rgb(149, 158, 171)
+                val source = state.nodes.firstOrNull { it.id == connectId }
+                if (source != null) {
+                    val sx = source.x + nodeW
+                    val sy = source.y + nodeH / 2f
+                    val tx = (tempX - offsetX) / scale
+                    val ty = (tempY - offsetY) / scale
+                    val path = Path()
+                    path.moveTo(sx, sy)
+                    val mid = (sx + tx) / 2f
+                    path.cubicTo(mid, sy, mid, ty, tx, ty)
+                    edgePaint.color = Color.rgb(255, 109, 90)
+                    canvas.drawPath(path, edgePaint)
                 }
             }
 
-            state.nodes.sortedBy { it.id }.forEach { drawNode(c, it) }
+            state.nodes.forEach { drawNode(canvas, it) }
+            canvas.restore()
+            canvas.restore()
         }
 
-        private fun drawGrid(c: Canvas) {
-            val step = dpF(24)
-            var x = 0f
+        private fun drawGrid(canvas: Canvas) {
+            val spacing = dpF(28f)
+            val screenOffsetX = offsetX % (spacing * scale)
+            val screenOffsetY = offsetY % (spacing * scale)
+
+            var x = screenOffsetX
             while (x < width) {
-                var y = 0f
+                var y = screenOffsetY
                 while (y < height) {
-                    c.drawCircle(x, y, dpF(1.0f), gridPaint)
-                    y += step
+                    val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = Color.rgb(52, 54, 59)
+                    }
+                    canvas.drawCircle(x, y, dpF(0.9f), dot)
+                    y += spacing * scale
                 }
-                x += step
+                x += spacing * scale
             }
         }
 
-        private fun drawEdge(c: Canvas, a: FlowNode, b: FlowNode, branch: String) {
-            val sx = a.x + nodeW
-            val sy = a.y + nodeH / 2
-            val ex = b.x
-            val ey = b.y + nodeH / 2
-            val p = Path()
-            p.moveTo(sx, sy)
-            val mid = (sx + ex) / 2
-            p.cubicTo(mid, sy, mid, ey, ex, ey)
+        private fun drawEdge(canvas: Canvas, from: FlowNode, to: FlowNode, branch: String) {
+            val sx = from.x + nodeW
+            val sy = from.y + nodeH / 2f
+            val ex = to.x
+            val ey = to.y + nodeH / 2f
+            val path = Path()
+            path.moveTo(sx, sy)
+            val gap = (ex - sx).coerceAtLeast(dpF(44f))
+            val bend = (sx + ex) / 2f
+            path.cubicTo(sx + gap * 0.34f, sy, bend, ey, ex, ey)
 
             edgePaint.color = when {
-                a.type == "IF" && branch.equals("true", true) -> Color.rgb(40, 150, 99)
-                a.type == "IF" && branch.equals("false", true) -> Color.rgb(205, 80, 79)
-                else -> Color.rgb(149, 158, 171)
+                from.type == "IF" && branch.equals("true", true) -> Color.rgb(76, 175, 112)
+                from.type == "IF" && branch.equals("false", true) -> Color.rgb(232, 94, 94)
+                else -> Color.rgb(137, 140, 147)
             }
-            c.drawPath(p, edgePaint)
+            canvas.drawPath(path, edgePaint)
 
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 color = edgePaint.color
                 style = Paint.Style.FILL
             }
             val arrow = Path().apply {
                 moveTo(ex, ey)
-                lineTo(ex - dpF(7), ey - dpF(4))
-                lineTo(ex - dpF(7), ey + dpF(4))
+                lineTo(ex - dpF(7f), ey - dpF(4f))
+                lineTo(ex - dpF(7f), ey + dpF(4f))
                 close()
             }
-            c.drawPath(arrow, fill)
+            canvas.drawPath(arrow, arrowPaint)
 
             if (branch.isNotBlank()) {
                 smallPaint.color = edgePaint.color
-                smallPaint.textSize = dpF(10)
-                c.drawText(branch, (sx + ex) / 2, (sy + ey) / 2 - dpF(5), smallPaint)
+                smallPaint.textSize = dpF(10f)
+                smallPaint.typeface = Typeface.DEFAULT_BOLD
+                canvas.drawText(branch, (sx + ex) / 2f, (sy + ey) / 2f - dpF(7f), smallPaint)
             }
         }
 
-        private fun drawNode(c: Canvas, n: FlowNode) {
-            val rect = RectF(n.x, n.y, n.x + nodeW, n.y + nodeH)
-            val accent = accent(n.type)
+        private fun drawNode(canvas: Canvas, node: FlowNode) {
+            val rect = RectF(node.x, node.y, node.x + nodeW, node.y + nodeH)
+            val accent = accent(node.type)
 
-            val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                setShadowLayer(
-                    if (selectedId == n.id) dpF(10) else dpF(5),
-                    0f,
-                    dpF(3),
-                    Color.argb(45, 0, 0, 0)
-                )
-            }
-            c.drawRoundRect(rect, dpF(15), dpF(15), shadow)
+            nodeFill.color = Color.rgb(34, 35, 38)
+            nodeStroke.color = if (selectedId == node.id) Color.rgb(255, 109, 90) else Color.rgb(83, 86, 93)
+            nodeStroke.strokeWidth = if (selectedId == node.id) dpF(2f) else dpF(1f)
 
-            c.drawRoundRect(
-                RectF(n.x, n.y, n.x + dpF(7), n.y + nodeH),
-                dpF(15),
-                dpF(15),
-                Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
+            canvas.drawRoundRect(rect, dpF(9f), dpF(9f), nodeFill)
+            canvas.drawRoundRect(rect, dpF(9f), dpF(9f), nodeStroke)
+
+            val iconRect = RectF(
+                node.x + dpF(10f),
+                node.y + dpF(11f),
+                node.x + dpF(42f),
+                node.y + dpF(43f)
             )
-
-            textPaint.color = Color.rgb(27, 31, 38)
-            textPaint.textSize = dpF(14.5f)
-            textPaint.typeface = Typeface.DEFAULT_BOLD
-            c.drawText(n.type, n.x + dpF(16), n.y + dpF(27), textPaint)
-
-            smallPaint.color = Color.rgb(91, 98, 109)
-            smallPaint.textSize = dpF(11.2f)
-            drawEllipsized(c, n.title, n.x + dpF(16), n.y + dpF(50), nodeW - dpF(31), smallPaint)
-
-            smallPaint.color = Color.rgb(140, 146, 156)
-            smallPaint.textSize = dpF(9.5f)
-            c.drawText("#" + n.id, n.x + dpF(16), n.y + dpF(73), smallPaint)
-
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
+            val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = accent
                 style = Paint.Style.FILL
             }
-            val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = accent
+            canvas.drawRoundRect(iconRect, dpF(7f), dpF(7f), iconPaint)
+
+            val abbreviation = node.type
+                .replace(Regex("[^A-Za-z]"), "")
+                .take(2)
+                .uppercase(Locale.US)
+
+            textPaint.color = Color.WHITE
+            textPaint.textSize = dpF(10f)
+            textPaint.typeface = Typeface.DEFAULT_BOLD
+            val tw = textPaint.measureText(abbreviation)
+            canvas.drawText(
+                abbreviation,
+                iconRect.centerX() - tw / 2f,
+                iconRect.centerY() + dpF(3.5f),
+                textPaint
+            )
+
+            textPaint.color = Color.rgb(244, 245, 247)
+            textPaint.textSize = dpF(13.5f)
+            textPaint.typeface = Typeface.DEFAULT_BOLD
+            drawEllipsized(
+                canvas,
+                node.title.ifBlank { node.type },
+                node.x + dpF(51f),
+                node.y + dpF(25f),
+                nodeW - dpF(62f),
+                textPaint
+            )
+
+            smallPaint.color = Color.rgb(159, 162, 170)
+            smallPaint.textSize = dpF(10.5f)
+            smallPaint.typeface = Typeface.DEFAULT
+            drawEllipsized(
+                canvas,
+                node.type,
+                node.x + dpF(51f),
+                node.y + dpF(43f),
+                nodeW - dpF(62f),
+                smallPaint
+            )
+
+            smallPaint.color = Color.rgb(105, 108, 115)
+            smallPaint.textSize = dpF(9f)
+            canvas.drawText("#" + node.id, node.x + dpF(12f), node.y + nodeH - dpF(12f), smallPaint)
+
+            val portFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(25, 26, 29)
+                style = Paint.Style.FILL
+            }
+            val portStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.rgb(152, 155, 162)
                 style = Paint.Style.STROKE
-                strokeWidth = dpF(2)
+                strokeWidth = dpF(1.4f)
             }
+            val cy = node.y + nodeH / 2f
 
-            val cy = n.y + nodeH / 2
-            c.drawCircle(n.x, cy, dpF(6), fill)
-            c.drawCircle(n.x, cy, dpF(6), outline)
-            c.drawCircle(n.x + nodeW, cy, dpF(6), fill)
-            c.drawCircle(n.x + nodeW, cy, dpF(6), outline)
-
-            if (selectedId == n.id) {
-                c.drawRoundRect(
-                    rect,
-                    dpF(15),
-                    dpF(15),
-                    Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                        color = Color.rgb(78, 104, 210)
-                        style = Paint.Style.STROKE
-                        strokeWidth = dpF(2)
-                    }
-                )
-            }
+            canvas.drawCircle(node.x, cy, dpF(5f), portFill)
+            canvas.drawCircle(node.x, cy, dpF(5f), portStroke)
+            canvas.drawCircle(node.x + nodeW, cy, dpF(5f), portFill)
+            canvas.drawCircle(node.x + nodeW, cy, dpF(5f), portStroke)
         }
 
         private fun drawEllipsized(
-            c: Canvas,
+            canvas: Canvas,
             value: String,
             x: Float,
             y: Float,
@@ -1692,25 +1794,35 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
             paint: Paint
         ) {
             if (paint.measureText(value) <= maxWidth) {
-                c.drawText(value, x, y, paint)
+                canvas.drawText(value, x, y, paint)
                 return
             }
             var text = value
             while (text.length > 1 && paint.measureText(text + "…") > maxWidth) {
                 text = text.dropLast(1)
             }
-            c.drawText(text + "…", x, y, paint)
+            canvas.drawText(text + "…", x, y, paint)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            scaleDetector.onTouchEvent(event)
+
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = event.x
                     downY = event.y
+                    lastX = event.x
+                    lastY = event.y
                     moved = false
-                    val hit = findNode(event.x, event.y)
+                    panning = false
 
-                    if (hit != null && isOutput(hit, event.x, event.y)) {
+                    if (event.pointerCount > 1) return true
+
+                    val logicalX = (event.x - offsetX) / scale
+                    val logicalY = (event.y - offsetY) / scale
+                    val hit = findNode(logicalX, logicalY)
+
+                    if (hit != null && isOutput(hit, logicalX, logicalY)) {
                         connectId = hit.id
                         tempX = event.x
                         tempY = event.y
@@ -1721,11 +1833,20 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
                     dragId = hit?.id
                     selectedId = hit?.id
+                    if (hit == null) panning = true
                     invalidate()
                     return true
                 }
 
                 MotionEvent.ACTION_MOVE -> {
+                    if (event.pointerCount > 1 || scaleDetector.isInProgress) return true
+
+                    val dx = event.x - lastX
+                    val dy = event.y - lastY
+                    if (abs(event.x - downX) + abs(event.y - downY) > dpF(7f)) moved = true
+                    lastX = event.x
+                    lastY = event.y
+
                     if (connectId != null) {
                         tempX = event.x
                         tempY = event.y
@@ -1733,18 +1854,16 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
                         return true
                     }
 
-                    val id = dragId ?: return true
-                    val node = state.nodes.firstOrNull { it.id == id } ?: return true
+                    val id = dragId
+                    if (id != null) {
+                        val node = state.nodes.firstOrNull { it.id == id } ?: return true
+                        node.x = (node.x + dx / scale).coerceAtLeast(0f)
+                        node.y = (node.y + dy / scale).coerceAtLeast(0f)
+                    } else if (panning) {
+                        offsetX += dx
+                        offsetY += dy
+                    }
 
-                    val dx = event.x - downX
-                    val dy = event.y - downY
-                    if (abs(dx) + abs(dy) > dpF(5)) moved = true
-
-                    node.x = (node.x + dx).coerceIn(0f, (width - nodeW).coerceAtLeast(0f))
-                    node.y = (node.y + dy).coerceIn(0f, (height - nodeH).coerceAtLeast(0f))
-
-                    downX = event.x
-                    downY = event.y
                     invalidate()
                     return true
                 }
@@ -1754,11 +1873,14 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
                         val source = state.nodes.firstOrNull { it.id == connectId }
                         connectId = null
 
-                        val target = findInput(event.x, event.y)
+                        val logicalX = (event.x - offsetX) / scale
+                        val logicalY = (event.y - offsetY) / scale
+                        val target = findInput(logicalX, logicalY)
+
                         if (source != null && target != null) {
                             connectNodes(source, target)
                         } else {
-                            setStatus("Connection cancelled", "Drop on an input dot.")
+                            setStatus("Connection cancelled", "Drop on another node's input port.")
                         }
 
                         invalidate()
@@ -1767,12 +1889,22 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
                     val selected = state.nodes.firstOrNull { it.id == dragId }
                     if (!moved && selected != null) {
+                        selectedId = selected.id
                         showNodeEditor(selected)
-                    } else {
+                    } else if (moved && dragId != null) {
                         WorkflowStore.save(this@MainActivity, state)
                     }
 
                     dragId = null
+                    panning = false
+                    invalidate()
+                    return true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    dragId = null
+                    connectId = null
+                    panning = false
                     invalidate()
                     return true
                 }
@@ -1780,20 +1912,15 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
             return true
         }
 
-        override fun performClick(): Boolean {
-            super.performClick()
-            return true
-        }
-
         private fun isOutput(node: FlowNode, x: Float, y: Float): Boolean {
             val hx = node.x + nodeW
-            val hy = node.y + nodeH / 2
-            return distance(x, y, hx, hy) <= dpF(18)
+            val hy = node.y + nodeH / 2f
+            return distance(x, y, hx, hy) <= dpF(18f)
         }
 
         private fun findInput(x: Float, y: Float): FlowNode? =
             state.nodes.asReversed().firstOrNull {
-                distance(x, y, it.x, it.y + nodeH / 2) <= dpF(22)
+                distance(x, y, it.x, it.y + nodeH / 2f) <= dpF(24f)
             }
 
         private fun findNode(x: Float, y: Float): FlowNode? =
@@ -1810,14 +1937,14 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
 
         private fun accent(type: String): Int = when (type) {
             "Manual Trigger", "Schedule Trigger", "Webhook Trigger", "Chat Trigger", "Error Trigger" ->
-                Color.rgb(55, 109, 232)
-            "HTTP Request", "Generic API", "GraphQL" -> Color.rgb(26, 137, 131)
-            "IF", "Filter", "Switch" -> Color.rgb(214, 139, 36)
-            "AI Text", "AI Agent" -> Color.rgb(133, 76, 199)
-            "Wait", "Limit", "Loop Over Items" -> Color.rgb(110, 118, 131)
-            "Notification", "Open URL", "Share Text" -> Color.rgb(31, 150, 104)
-            "Stop / Error" -> Color.rgb(205, 77, 78)
-            else -> Color.rgb(91, 102, 118)
+                Color.rgb(85, 115, 245)
+            "HTTP Request", "Generic API", "GraphQL" -> Color.rgb(38, 177, 169)
+            "IF", "Filter", "Switch" -> Color.rgb(232, 163, 69)
+            "AI Text", "AI Agent" -> Color.rgb(156, 95, 221)
+            "Wait", "Limit", "Loop Over Items" -> Color.rgb(143, 148, 158)
+            "Notification", "Open URL", "Share Text" -> Color.rgb(53, 177, 119)
+            "Stop / Error" -> Color.rgb(229, 91, 91)
+            else -> Color.rgb(108, 113, 124)
         }
     }
 
