@@ -47,9 +47,9 @@ class MainActivity : Activity() {
     private lateinit var canvas: WorkflowCanvas
     private lateinit var statusView: TextView
     private lateinit var logView: TextView
-    private lateinit var nameView: TextView
     private lateinit var activeSwitch: Switch
     private lateinit var editorFrame: FrameLayout
+    private lateinit var breadcrumbView: TextView
     private var nodePanel: View? = null
 
     private var state = WorkflowState()
@@ -78,6 +78,20 @@ class MainActivity : Activity() {
         }.onFailure { error ->
             showStartupRecovery(error)
         }
+    }
+
+    override fun onPause() {
+        runCatching { WorkflowStore.save(this, state) }
+        super.onPause()
+    }
+
+    override fun onBackPressed() {
+        if (nodePanel != null) {
+            nodePanel?.let { editorFrame.removeView(it) }
+            nodePanel = null
+            return
+        }
+        super.onBackPressed()
     }
 
     private fun showStartupRecovery(error: Throwable) {
@@ -223,6 +237,7 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(207, 209, 215))
             setOnClickListener { renameWorkflow() }
         }
+        breadcrumbView = breadcrumb
         topbar.addView(breadcrumb, LinearLayout.LayoutParams(0, -1, 1f))
 
         val editorTab = TextView(this).apply {
@@ -294,6 +309,13 @@ class MainActivity : Activity() {
             marginStart = dp(5)
         })
 
+        val command = n8nChromeButton("⌘")
+        command.contentDescription = "Command center"
+        command.setOnClickListener { showCommandCenter() }
+        topbar.addView(command, LinearLayout.LayoutParams(dp(40), dp(34)).apply {
+            marginStart = dp(5)
+        })
+
         val more = n8nChromeButton("⋯")
         more.setOnClickListener { showMoreMenu() }
         topbar.addView(more, LinearLayout.LayoutParams(dp(40), dp(34)).apply {
@@ -344,8 +366,8 @@ class MainActivity : Activity() {
         val fit = canvasTool("⌗") { canvas.fitView() }
         val zoomOut = canvasTool("−") { canvas.zoomBy(0.82f) }
         val zoomIn = canvasTool("+") { canvas.zoomBy(1.22f) }
-        val undo = canvasTool("↶") { Toast.makeText(this, "Undo is reserved for the next history layer.", Toast.LENGTH_SHORT).show() }
-        val redo = canvasTool("↷") { Toast.makeText(this, "Redo is reserved for the next history layer.", Toast.LENGTH_SHORT).show() }
+        val undo = canvasTool("↶") { showCommandCenter() }
+        val redo = canvasTool("↷") { showCommandCenter() }
 
         listOf(fit, zoomOut, zoomIn, undo, redo).forEach { v ->
             canvasTools.addView(v, LinearLayout.LayoutParams(dp(38), dp(34)))
@@ -417,7 +439,11 @@ class MainActivity : Activity() {
             putExtra(Intent.EXTRA_TEXT, content)
             putExtra(Intent.EXTRA_SUBJECT, state.name)
         }
-        startActivity(Intent.createChooser(intent, "Share workflow"))
+        runCatching {
+            startActivity(Intent.createChooser(intent, "Share workflow"))
+        }.onFailure {
+            Toast.makeText(this, "No app is available to share this workflow.", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun addNode(type: String) {
@@ -1180,6 +1206,44 @@ class MainActivity : Activity() {
             .show()
     }
 
+    private fun showCommandCenter() {
+        val items = arrayOf(
+            "Add node",
+            "Execute workflow",
+            "Save workflow",
+            "Open workflows",
+            "Executions",
+            "Credentials",
+            "Automation status",
+            "Import workflow JSON",
+            "Export n8n JSON",
+            "Rename workflow"
+        )
+
+        AlertDialog.Builder(this)
+            .setTitle("Command center")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showNodeLibrary()
+                    1 -> runWorkflow()
+                    2 -> {
+                        WorkflowStore.save(this, state)
+                        syncAutomation()
+                        setStatus("Saved", "Workflow saved on this device.")
+                    }
+                    3 -> showWorkflows()
+                    4 -> showHistory()
+                    5 -> showCredentials()
+                    6 -> showAutomationStatus()
+                    7 -> importJson()
+                    8 -> exportJson(true)
+                    9 -> renameWorkflow()
+                }
+            }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
     private fun showMoreMenu() {
         val items = arrayOf(
             "Node Library",
@@ -1247,10 +1311,14 @@ class MainActivity : Activity() {
 
         if (requestCode == REQ_EXPORT) {
             val value = pendingExport ?: return
-            contentResolver.openOutputStream(uri)?.use { output ->
-                OutputStreamWriter(output, Charsets.UTF_8).use { writer -> writer.write(value) }
+            runCatching {
+                contentResolver.openOutputStream(uri)?.use { output ->
+                    OutputStreamWriter(output, Charsets.UTF_8).use { writer -> writer.write(value) }
+                } ?: error("Unable to open destination")
+                setStatus("Exported", "Workflow JSON written.")
+            }.onFailure {
+                setStatus("Export failed", it.message ?: "Unable to write workflow JSON")
             }
-            setStatus("Exported", "Workflow JSON written.")
             return
         }
 
@@ -1543,6 +1611,9 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
     }
 
     private fun refreshUi() {
+        if (::breadcrumbView.isInitialized) {
+            breadcrumbView.text = "Personal  /  " + state.name
+        }
         // Legacy nameView is not part of the current editor hierarchy.
 
         activeSwitch.setOnCheckedChangeListener(null)
