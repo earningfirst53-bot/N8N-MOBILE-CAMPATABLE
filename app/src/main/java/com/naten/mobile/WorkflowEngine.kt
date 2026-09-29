@@ -17,9 +17,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 
 interface ExecutionListener {
     fun onStatus(message: String)
@@ -86,7 +84,6 @@ class WorkflowEngine(private val context: Context) {
                     put("trigger", if (background) "schedule" else "manual")
                     put("timestamp", now())
                 }
-                finalData = JSONObject(data.toString())
 
                 while (queue.isNotEmpty()) {
                     val id = queue.removeFirst()
@@ -176,7 +173,6 @@ class WorkflowEngine(private val context: Context) {
                         put("durationMs", System.currentTimeMillis() - started)
                         put("success", success)
                         put("message", message)
-                        put("output", finalData.toString().take(12000))
                     }
                 )
 
@@ -470,7 +466,7 @@ class WorkflowEngine(private val context: Context) {
                     render(c.optString("filename", "output.txt"), input, variables)
                 )
                 val expression = c.optString("data").ifBlank {
-                    "{{" + '
+                    "{{" + '                }
                 val file = java.io.File(context.filesDir, name)
                 file.writeText(render(expression, input, variables))
                 NodeResult(JSONObject(input.toString()).apply {
@@ -502,16 +498,6 @@ class WorkflowEngine(private val context: Context) {
             "Respond to Webhook" -> {
                 val body = render(
                     c.optString("body").ifBlank { "{{" + '
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
                 val url = render(c.optString("url"), input, variables)
                 if (!background && url.isNotBlank()) {
                     context.startActivity(
@@ -596,7 +582,7 @@ class WorkflowEngine(private val context: Context) {
         val sub = WorkflowStore.load(context, workflowId)
             ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
 
-        val latch = CountDownLatch(1)
+        val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
         var message = "Sub-workflow did not finish"
         var output = JSONObject()
@@ -605,15 +591,14 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
+                override fun onStatus(status: String) = report("Sub-workflow: " + status)
+                override fun onLog(log: String) = report("Sub-workflow log: " + log)
 
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
+                override fun onFinished(
+                    success: Boolean,
+                    result: String,
+                    finalOutput: JSONObject
+                ) {
                     ok = success
                     message = result
                     output = JSONObject(finalOutput.toString())
@@ -623,10 +608,9 @@ class WorkflowEngine(private val context: Context) {
             background = background
         )
 
-        latch.await(10, TimeUnit.MINUTES)
+        latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
 
-        report("Sub-workflow completed")
         return NodeResult(output)
     }
 
@@ -668,9 +652,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -843,550 +827,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
-        return json.optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
-            ?.optString("content")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.optString("output")
-                .ifBlank { json.optString("text") }
-                .ifBlank { json.toString() }
-    }
-
-    private fun callGemini(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        val base = endpoint.ifBlank {
-            "https://generativelanguage.googleapis.com/v1beta/models/" +
-                model + ":generateContent"
-        }
-
-        val url = if (base.contains("?")) {
-            base + "&key=" + key
-        } else {
-            base + "?key=" + key
-        }
-
-        val body = JSONObject().apply {
-            put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", prompt))
-                    )
-                )
-            )
-            put(
-                "generationConfig",
-                JSONObject().put("temperature", temperature)
-            )
-        }
-
-        val json = postJson(url, "", body)
-
-        return json.optJSONArray("candidates")
-            ?.optJSONObject(0)
-            ?.optJSONObject("content")
-            ?.optJSONArray("parts")
-            ?.optJSONObject(0)
-            ?.optString("text")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.toString()
-    }
-
-    private fun postJson(
-        endpoint: String,
-        key: String,
-        body: JSONObject
-    ): JSONObject {
-        return postJsonWithHeaders(endpoint, key, body, emptyMap())
-    }
-
-    private fun postJsonWithHeaders(
-        endpoint: String,
-        key: String,
-        body: JSONObject,
-        extraHeaders: Map<String, String>
-    ): JSONObject {
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            doInput = true
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            if (key.isNotBlank()) {
-                setRequestProperty("Authorization", "Bearer " + key)
-            }
-            extraHeaders.forEach { pair ->
-                setRequestProperty(pair.key, pair.value)
-            }
-        }
-
-        connection.outputStream.use {
-            it.write(body.toString().toByteArray(Charsets.UTF_8))
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val text = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-
-        connection.disconnect()
-
-        if (code >= 400) {
-            throw IllegalStateException(
-                "Request failed (" + code + "): " + text.take(180)
-            )
-        }
-
-        return runCatching { JSONObject(text) }
-            .getOrElse { JSONObject().put("body", text) }
-    }
-
-    private fun postNotification(title: String, message: String) {
-        val manager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "naten_runs"
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    channelId,
-                    "NATEN workflow results",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
-            )
-        }
-
-        val builder = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(context, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
-
-        manager.notify(
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-            builder
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(title)
-                .setContentText(message.take(140))
-                .setAutoCancel(true)
-                .build()
-        )
-    }
-
-    private fun now(): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-}
- + "json}}"
-                }
-                val file = java.io.File(context.filesDir, name)
-                file.writeText(render(expression, input, variables))
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("fileName", name)
-                    put("filePath", file.absolutePath)
-                })
-            }
-
-            "Set Variable" -> {
-                val key = c.optString("key", "value")
-                val value = render(c.optString("value"), input, variables)
-                variables[key] = value
-                NodeResult(JSONObject(input.toString()).apply { put(key, value) })
-            }
-
-            "Log" -> {
-                report(render(c.optString("message", "Log"), input, variables))
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Notification" -> {
-                val title = render(c.optString("title", "NATEN"), input, variables)
-                val body = render(c.optString("message", "Workflow finished"), input, variables)
-                postNotification(title, body)
-                report("Notification sent")
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
-                val url = render(c.optString("url"), input, variables)
-                if (!background && url.isNotBlank()) {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Opened " + url)
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Share Text" -> {
-                val text = render(c.optString("text"), input, variables)
-                if (!background) {
-                    val send = Intent(Intent.ACTION_SEND).apply {
-                        this.type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, text)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(
-                        Intent.createChooser(send, "Share with…")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Share sheet opened")
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Stop / Error" -> {
-                val body = render(c.optString("message", "Stopped"), input, variables)
-                NodeResult(
-                    JSONObject(input.toString()),
-                    stop = true,
-                    success = false,
-                    message = body
-                )
-            }
-
-            "AI Text", "AI Agent" -> {
-                val provider = c.optString("provider", "OpenAI-compatible")
-                val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
-                val answer = if (provider == "Gemini") {
-                    callGemini(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                } else {
-                    callOpenAiCompatible(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                }
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("text", answer)
-                    put("ai", answer)
-                })
-            }
-
-            else -> NodeResult(JSONObject(input.toString()))
-        }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
-    }
-
-    private fun renderExpressionField(
-        c: JSONObject,
-        field: String,
-        input: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        val value = c.optString("value")
-        if (value.isNotBlank()) return render(value, input, variables)
-        return lookup(input, field).orEmpty()
-    }
-
-    private fun executeHttp(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val method = c.optString("method", "GET").uppercase(Locale.US)
-        val urlText = render(c.optString("url"), input, variables)
-        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
-
-        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = 45_000
-            useCaches = false
-            doInput = true
-        }
-
-        parseHeaders(render(c.optString("headers"), input, variables))
-            .forEach { pair ->
-                connection.setRequestProperty(pair.key, pair.value)
-            }
-
-        val credentialName = c.optString("credentialName").trim()
-        if (credentialName.isNotBlank()) {
-            val secret = CredentialVault.get(context, credentialName)
-                ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
-            val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
-        }
-
-        if (method != "GET" && method != "HEAD") {
-            connection.doOutput = true
-            val body = render(c.optString("body"), input, variables)
-            if (body.isNotBlank()) {
-                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
-                    connection.setRequestProperty("Content-Type", "application/json")
-                }
-                connection.outputStream.use {
-                    it.write(body.toByteArray(Charsets.UTF_8))
-                }
-            }
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val body = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-        connection.disconnect()
-
-        report("HTTP " + method + " " + code + " " + urlText.take(80))
-
-        val out = JSONObject().apply {
-            put("statusCode", code)
-            put("ok", code < 400)
-            put("body", body)
-            if (body.trim().startsWith("{")) {
-                runCatching { put("json", JSONObject(body)) }
-            }
-            if (body.trim().startsWith("[")) {
-                runCatching { put("json", JSONArray(body)) }
-            }
-        }
-
-        if (code >= 400) {
-            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
-        }
-
-        return NodeResult(out)
-    }
-
-    private fun executeGraphQl(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val url = render(c.optString("url"), input, variables)
-        require(url.isNotBlank()) { "GraphQL node needs a URL." }
-
-        val variablesText = render(c.optString("variables", "{}"), input, variables)
-        val body = JSONObject().apply {
-            put("query", render(c.optString("query"), input, variables))
-            put(
-                "variables",
-                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
-            )
-        }
-
-        val response = postJsonWithHeaders(
-            url,
-            "",
-            body,
-            parseHeaders(render(c.optString("headers"), input, variables))
-        )
-        report("GraphQL request completed")
-        return NodeResult(response)
-    }
-
-    private fun parsePairs(text: String): List<Pair<String, String>> {
-        return text.lines().mapNotNull { line ->
-            val clean = line.trim()
-            val index = clean.indexOf('=')
-            if (index <= 0) null
-            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
-        }
-    }
-
-    private fun parseHeaders(text: String): Map<String, String> {
-        return text.lines().mapNotNull { line ->
-            val index = line.indexOf(':')
-            if (index <= 0) null
-            else line.substring(0, index).trim() to line.substring(index + 1).trim()
-        }.toMap()
-    }
-
-    private fun safeFileName(value: String): String {
-        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
-        return clean.substringAfterLast('/').ifBlank { "file.txt" }
-    }
-
-    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
-        val actual = actualRaw.trim()
-        val expected = expectedRaw.trim()
-
-        return when (op.lowercase(Locale.US)) {
-            "equals" -> actual == expected
-            "not equals" -> actual != expected
-            "contains" -> actual.contains(expected, ignoreCase = true)
-            "starts with" -> actual.startsWith(expected, ignoreCase = true)
-            "ends with" -> actual.endsWith(expected, ignoreCase = true)
-            "greater than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a > b }
-            } == true
-            "less than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a < b }
-            } == true
-            "exists" -> actual.isNotBlank()
-            "not exists" -> actual.isBlank()
-            else -> actual == expected
-        }
-    }
-
-    private fun lookupRaw(root: JSONObject, path: String): Any? {
-        val clean = path
-            .removePrefix("{{\\$json.")
-            .removeSuffix("}}")
-            .removePrefix("json.")
-
-        if (clean.isBlank() || clean == "json") return root
-
-        var current: Any = root
-        for (key in clean.split('.').filter { it.isNotBlank() }) {
-            current = when (current) {
-                is JSONObject -> current.opt(key) ?: return null
-                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
-                else -> return null
-            }
-        }
-
-        return current
-    }
-
-    private fun lookup(root: JSONObject, path: String): String? {
-        return lookupRaw(root, path)?.let {
-            if (it == JSONObject.NULL) null else it.toString()
-        }
-    }
-
-    private fun render(
-        source: String,
-        data: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        var result = source
-        result = result.replace("{{\\$now}}", now())
-        result = result.replace("{{\\$json}}", data.toString())
-
-        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
-        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
-            val key = match.groupValues.getOrElse(1) { "" }
-            result = result.replace(
-                match.value,
-                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
-            )
-        }
-
-        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
-        varsPattern.findAll(result).toList().asReversed().forEach { match ->
-            result = result.replace(
-                match.value,
-                variables[match.groupValues[1]].orEmpty()
-            )
-        }
-
-        return result
-    }
-
-    private fun callOpenAiCompatible(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
-
-        val body = JSONObject().apply {
-            put("model", model)
-            put(
-                "messages",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put("content", prompt)
-                )
-            )
-            put("temperature", temperature)
-        }
-
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -1536,10 +977,10 @@ class WorkflowEngine(private val context: Context) {
                     input,
                     variables
                 )
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
                 NodeResult(JSONObject(input.toString()).apply {
                     put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
+                    put("_webhookStatus", status)
                 })
             }
 
@@ -1587,14 +1028,10 @@ class WorkflowEngine(private val context: Context) {
             "AI Text", "AI Agent" -> {
                 val provider = c.optString("provider", "OpenAI-compatible")
                 val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
                 val answer = if (provider == "Gemini") {
                     callGemini(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -1602,7 +1039,7 @@ class WorkflowEngine(private val context: Context) {
                 } else {
                     callOpenAiCompatible(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -1616,52 +1053,6 @@ class WorkflowEngine(private val context: Context) {
 
             else -> NodeResult(JSONObject(input.toString()))
         }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
     }
 
     private fun renderExpressionField(
@@ -1702,9 +1093,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -1899,8 +1290,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -2077,17 +1467,8 @@ class WorkflowEngine(private val context: Context) {
             }
 
             "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
+                val body = render(
+                    c.optString("body").ifBlank { "{{" + '
                 val url = render(c.optString("url"), input, variables)
                 if (!background && url.isNotBlank()) {
                     context.startActivity(
@@ -2172,7 +1553,7 @@ class WorkflowEngine(private val context: Context) {
         val sub = WorkflowStore.load(context, workflowId)
             ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
 
-        val latch = CountDownLatch(1)
+        val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
         var message = "Sub-workflow did not finish"
         var output = JSONObject()
@@ -2181,15 +1562,14 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
+                override fun onStatus(status: String) = report("Sub-workflow: " + status)
+                override fun onLog(log: String) = report("Sub-workflow log: " + log)
 
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
+                override fun onFinished(
+                    success: Boolean,
+                    result: String,
+                    finalOutput: JSONObject
+                ) {
                     ok = success
                     message = result
                     output = JSONObject(finalOutput.toString())
@@ -2199,10 +1579,9 @@ class WorkflowEngine(private val context: Context) {
             background = background
         )
 
-        latch.await(10, TimeUnit.MINUTES)
+        latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
 
-        report("Sub-workflow completed")
         return NodeResult(output)
     }
 
@@ -2244,9 +1623,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -2441,8 +1820,470 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
+        return json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
+                .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callGemini(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        val base = endpoint.ifBlank {
+            "https://generativelanguage.googleapis.com/v1beta/models/" +
+                model + ":generateContent"
+        }
+
+        val url = if (base.contains("?")) {
+            base + "&key=" + key
+        } else {
+            base + "?key=" + key
+        }
+
+        val body = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", prompt))
+                    )
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().put("temperature", temperature)
+            )
+        }
+
+        val json = postJson(url, "", body)
+
+        return json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.toString()
+    }
+
+    private fun postJson(
+        endpoint: String,
+        key: String,
+        body: JSONObject
+    ): JSONObject {
+        return postJsonWithHeaders(endpoint, key, body, emptyMap())
+    }
+
+    private fun postJsonWithHeaders(
+        endpoint: String,
+        key: String,
+        body: JSONObject,
+        extraHeaders: Map<String, String>
+    ): JSONObject {
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) {
+                setRequestProperty("Authorization", "Bearer " + key)
+            }
+            extraHeaders.forEach { pair ->
+                setRequestProperty(pair.key, pair.value)
+            }
+        }
+
+        connection.outputStream.use {
+            it.write(body.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val text = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+
+        connection.disconnect()
+
+        if (code >= 400) {
+            throw IllegalStateException(
+                "Request failed (" + code + "): " + text.take(180)
+            )
+        }
+
+        return runCatching { JSONObject(text) }
+            .getOrElse { JSONObject().put("body", text) }
+    }
+
+    private fun postNotification(title: String, message: String) {
+        val manager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "naten_runs"
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "NATEN workflow results",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(context, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+
+        manager.notify(
+            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+            builder
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(message.take(140))
+                .setAutoCancel(true)
+                .build()
+        )
+    }
+
+    private fun now(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+}
+ + "json}}" },
+                    input,
+                    variables
+                )
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("_webhookResponse", body)
+                    put("_webhookStatus", status)
+                })
+            }
+
+            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
+
+            "Open URL" -> {
+                val url = render(c.optString("url"), input, variables)
+                if (!background && url.isNotBlank()) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Opened " + url)
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Share Text" -> {
+                val text = render(c.optString("text"), input, variables)
+                if (!background) {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        this.type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(
+                        Intent.createChooser(send, "Share with…")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Share sheet opened")
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Stop / Error" -> {
+                val body = render(c.optString("message", "Stopped"), input, variables)
+                NodeResult(
+                    JSONObject(input.toString()),
+                    stop = true,
+                    success = false,
+                    message = body
+                )
+            }
+
+            "AI Text", "AI Agent" -> {
+                val provider = c.optString("provider", "OpenAI-compatible")
+                val prompt = render(c.optString("prompt"), input, variables)
+                val answer = if (provider == "Gemini") {
+                    callGemini(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                } else {
+                    callOpenAiCompatible(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                }
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("text", answer)
+                    put("ai", answer)
+                })
+            }
+
+            else -> NodeResult(JSONObject(input.toString()))
+        }
+    }
+
+    private fun renderExpressionField(
+        c: JSONObject,
+        field: String,
+        input: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        val value = c.optString("value")
+        if (value.isNotBlank()) return render(value, input, variables)
+        return lookup(input, field).orEmpty()
+    }
+
+    private fun executeHttp(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val method = c.optString("method", "GET").uppercase(Locale.US)
+        val urlText = render(c.optString("url"), input, variables)
+        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
+
+        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 15_000
+            readTimeout = 45_000
+            useCaches = false
+            doInput = true
+        }
+
+        parseHeaders(render(c.optString("headers"), input, variables))
+            .forEach { pair ->
+                connection.setRequestProperty(pair.key, pair.value)
+            }
+
+        val credentialName = c.optString("credentialName").trim()
+        if (credentialName.isNotBlank()) {
+            val secret = CredentialVault.get(context, credentialName)
+                ?: throw IllegalStateException("Credential not found: " + credentialName)
+            val header = c.optString("credentialHeader", "Authorization")
+            val prefix = c.optString("credentialPrefix", "Bearer ")
+            connection.setRequestProperty(header, prefix + secret)
+        }
+
+        if (method != "GET" && method != "HEAD") {
+            connection.doOutput = true
+            val body = render(c.optString("body"), input, variables)
+            if (body.isNotBlank()) {
+                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
+                    connection.setRequestProperty("Content-Type", "application/json")
+                }
+                connection.outputStream.use {
+                    it.write(body.toByteArray(Charsets.UTF_8))
+                }
+            }
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val body = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+        connection.disconnect()
+
+        report("HTTP " + method + " " + code + " " + urlText.take(80))
+
+        val out = JSONObject().apply {
+            put("statusCode", code)
+            put("ok", code < 400)
+            put("body", body)
+            if (body.trim().startsWith("{")) {
+                runCatching { put("json", JSONObject(body)) }
+            }
+            if (body.trim().startsWith("[")) {
+                runCatching { put("json", JSONArray(body)) }
+            }
+        }
+
+        if (code >= 400) {
+            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
+        }
+
+        return NodeResult(out)
+    }
+
+    private fun executeGraphQl(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val url = render(c.optString("url"), input, variables)
+        require(url.isNotBlank()) { "GraphQL node needs a URL." }
+
+        val variablesText = render(c.optString("variables", "{}"), input, variables)
+        val body = JSONObject().apply {
+            put("query", render(c.optString("query"), input, variables))
+            put(
+                "variables",
+                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
+            )
+        }
+
+        val response = postJsonWithHeaders(
+            url,
+            "",
+            body,
+            parseHeaders(render(c.optString("headers"), input, variables))
+        )
+        report("GraphQL request completed")
+        return NodeResult(response)
+    }
+
+    private fun parsePairs(text: String): List<Pair<String, String>> {
+        return text.lines().mapNotNull { line ->
+            val clean = line.trim()
+            val index = clean.indexOf('=')
+            if (index <= 0) null
+            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
+        }
+    }
+
+    private fun parseHeaders(text: String): Map<String, String> {
+        return text.lines().mapNotNull { line ->
+            val index = line.indexOf(':')
+            if (index <= 0) null
+            else line.substring(0, index).trim() to line.substring(index + 1).trim()
+        }.toMap()
+    }
+
+    private fun safeFileName(value: String): String {
+        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
+        return clean.substringAfterLast('/').ifBlank { "file.txt" }
+    }
+
+    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
+        val actual = actualRaw.trim()
+        val expected = expectedRaw.trim()
+
+        return when (op.lowercase(Locale.US)) {
+            "equals" -> actual == expected
+            "not equals" -> actual != expected
+            "contains" -> actual.contains(expected, ignoreCase = true)
+            "starts with" -> actual.startsWith(expected, ignoreCase = true)
+            "ends with" -> actual.endsWith(expected, ignoreCase = true)
+            "greater than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a > b }
+            } == true
+            "less than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a < b }
+            } == true
+            "exists" -> actual.isNotBlank()
+            "not exists" -> actual.isBlank()
+            else -> actual == expected
+        }
+    }
+
+    private fun lookupRaw(root: JSONObject, path: String): Any? {
+        val clean = path
+            .removePrefix("{{\\$json.")
+            .removeSuffix("}}")
+            .removePrefix("json.")
+
+        if (clean.isBlank() || clean == "json") return root
+
+        var current: Any = root
+        for (key in clean.split('.').filter { it.isNotBlank() }) {
+            current = when (current) {
+                is JSONObject -> current.opt(key) ?: return null
+                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
+                else -> return null
+            }
+        }
+
+        return current
+    }
+
+    private fun lookup(root: JSONObject, path: String): String? {
+        return lookupRaw(root, path)?.let {
+            if (it == JSONObject.NULL) null else it.toString()
+        }
+    }
+
+    private fun render(
+        source: String,
+        data: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        var result = source
+        result = result.replace("{{\\$now}}", now())
+        result = result.replace("{{\\$json}}", data.toString())
+
+        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
+        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
+            val key = match.groupValues.getOrElse(1) { "" }
+            result = result.replace(
+                match.value,
+                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
+            )
+        }
+
+        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
+        varsPattern.findAll(result).toList().asReversed().forEach { match ->
+            result = result.replace(
+                match.value,
+                variables[match.groupValues[1]].orEmpty()
+            )
+        }
+
+        return result
+    }
+
+    private fun callOpenAiCompatible(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put(
+                "messages",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", prompt)
+                )
+            )
+            put("temperature", temperature)
+        }
+
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -2663,550 +2504,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
-        return json.optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
-            ?.optString("content")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.optString("output")
-                .ifBlank { json.optString("text") }
-                .ifBlank { json.toString() }
-    }
-
-    private fun callGemini(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        val base = endpoint.ifBlank {
-            "https://generativelanguage.googleapis.com/v1beta/models/" +
-                model + ":generateContent"
-        }
-
-        val url = if (base.contains("?")) {
-            base + "&key=" + key
-        } else {
-            base + "?key=" + key
-        }
-
-        val body = JSONObject().apply {
-            put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", prompt))
-                    )
-                )
-            )
-            put(
-                "generationConfig",
-                JSONObject().put("temperature", temperature)
-            )
-        }
-
-        val json = postJson(url, "", body)
-
-        return json.optJSONArray("candidates")
-            ?.optJSONObject(0)
-            ?.optJSONObject("content")
-            ?.optJSONArray("parts")
-            ?.optJSONObject(0)
-            ?.optString("text")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.toString()
-    }
-
-    private fun postJson(
-        endpoint: String,
-        key: String,
-        body: JSONObject
-    ): JSONObject {
-        return postJsonWithHeaders(endpoint, key, body, emptyMap())
-    }
-
-    private fun postJsonWithHeaders(
-        endpoint: String,
-        key: String,
-        body: JSONObject,
-        extraHeaders: Map<String, String>
-    ): JSONObject {
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            doInput = true
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            if (key.isNotBlank()) {
-                setRequestProperty("Authorization", "Bearer " + key)
-            }
-            extraHeaders.forEach { pair ->
-                setRequestProperty(pair.key, pair.value)
-            }
-        }
-
-        connection.outputStream.use {
-            it.write(body.toString().toByteArray(Charsets.UTF_8))
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val text = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-
-        connection.disconnect()
-
-        if (code >= 400) {
-            throw IllegalStateException(
-                "Request failed (" + code + "): " + text.take(180)
-            )
-        }
-
-        return runCatching { JSONObject(text) }
-            .getOrElse { JSONObject().put("body", text) }
-    }
-
-    private fun postNotification(title: String, message: String) {
-        val manager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "naten_runs"
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    channelId,
-                    "NATEN workflow results",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
-            )
-        }
-
-        val builder = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(context, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
-
-        manager.notify(
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-            builder
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(title)
-                .setContentText(message.take(140))
-                .setAutoCancel(true)
-                .build()
-        )
-    }
-
-    private fun now(): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-}
- + "json}}"
-                }
-                val file = java.io.File(context.filesDir, name)
-                file.writeText(render(expression, input, variables))
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("fileName", name)
-                    put("filePath", file.absolutePath)
-                })
-            }
-
-            "Set Variable" -> {
-                val key = c.optString("key", "value")
-                val value = render(c.optString("value"), input, variables)
-                variables[key] = value
-                NodeResult(JSONObject(input.toString()).apply { put(key, value) })
-            }
-
-            "Log" -> {
-                report(render(c.optString("message", "Log"), input, variables))
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Notification" -> {
-                val title = render(c.optString("title", "NATEN"), input, variables)
-                val body = render(c.optString("message", "Workflow finished"), input, variables)
-                postNotification(title, body)
-                report("Notification sent")
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
-                val url = render(c.optString("url"), input, variables)
-                if (!background && url.isNotBlank()) {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Opened " + url)
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Share Text" -> {
-                val text = render(c.optString("text"), input, variables)
-                if (!background) {
-                    val send = Intent(Intent.ACTION_SEND).apply {
-                        this.type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, text)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(
-                        Intent.createChooser(send, "Share with…")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Share sheet opened")
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Stop / Error" -> {
-                val body = render(c.optString("message", "Stopped"), input, variables)
-                NodeResult(
-                    JSONObject(input.toString()),
-                    stop = true,
-                    success = false,
-                    message = body
-                )
-            }
-
-            "AI Text", "AI Agent" -> {
-                val provider = c.optString("provider", "OpenAI-compatible")
-                val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
-                val answer = if (provider == "Gemini") {
-                    callGemini(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                } else {
-                    callOpenAiCompatible(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                }
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("text", answer)
-                    put("ai", answer)
-                })
-            }
-
-            else -> NodeResult(JSONObject(input.toString()))
-        }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
-    }
-
-    private fun renderExpressionField(
-        c: JSONObject,
-        field: String,
-        input: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        val value = c.optString("value")
-        if (value.isNotBlank()) return render(value, input, variables)
-        return lookup(input, field).orEmpty()
-    }
-
-    private fun executeHttp(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val method = c.optString("method", "GET").uppercase(Locale.US)
-        val urlText = render(c.optString("url"), input, variables)
-        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
-
-        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = 45_000
-            useCaches = false
-            doInput = true
-        }
-
-        parseHeaders(render(c.optString("headers"), input, variables))
-            .forEach { pair ->
-                connection.setRequestProperty(pair.key, pair.value)
-            }
-
-        val credentialName = c.optString("credentialName").trim()
-        if (credentialName.isNotBlank()) {
-            val secret = CredentialVault.get(context, credentialName)
-                ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
-            val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
-        }
-
-        if (method != "GET" && method != "HEAD") {
-            connection.doOutput = true
-            val body = render(c.optString("body"), input, variables)
-            if (body.isNotBlank()) {
-                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
-                    connection.setRequestProperty("Content-Type", "application/json")
-                }
-                connection.outputStream.use {
-                    it.write(body.toByteArray(Charsets.UTF_8))
-                }
-            }
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val body = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-        connection.disconnect()
-
-        report("HTTP " + method + " " + code + " " + urlText.take(80))
-
-        val out = JSONObject().apply {
-            put("statusCode", code)
-            put("ok", code < 400)
-            put("body", body)
-            if (body.trim().startsWith("{")) {
-                runCatching { put("json", JSONObject(body)) }
-            }
-            if (body.trim().startsWith("[")) {
-                runCatching { put("json", JSONArray(body)) }
-            }
-        }
-
-        if (code >= 400) {
-            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
-        }
-
-        return NodeResult(out)
-    }
-
-    private fun executeGraphQl(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val url = render(c.optString("url"), input, variables)
-        require(url.isNotBlank()) { "GraphQL node needs a URL." }
-
-        val variablesText = render(c.optString("variables", "{}"), input, variables)
-        val body = JSONObject().apply {
-            put("query", render(c.optString("query"), input, variables))
-            put(
-                "variables",
-                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
-            )
-        }
-
-        val response = postJsonWithHeaders(
-            url,
-            "",
-            body,
-            parseHeaders(render(c.optString("headers"), input, variables))
-        )
-        report("GraphQL request completed")
-        return NodeResult(response)
-    }
-
-    private fun parsePairs(text: String): List<Pair<String, String>> {
-        return text.lines().mapNotNull { line ->
-            val clean = line.trim()
-            val index = clean.indexOf('=')
-            if (index <= 0) null
-            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
-        }
-    }
-
-    private fun parseHeaders(text: String): Map<String, String> {
-        return text.lines().mapNotNull { line ->
-            val index = line.indexOf(':')
-            if (index <= 0) null
-            else line.substring(0, index).trim() to line.substring(index + 1).trim()
-        }.toMap()
-    }
-
-    private fun safeFileName(value: String): String {
-        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
-        return clean.substringAfterLast('/').ifBlank { "file.txt" }
-    }
-
-    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
-        val actual = actualRaw.trim()
-        val expected = expectedRaw.trim()
-
-        return when (op.lowercase(Locale.US)) {
-            "equals" -> actual == expected
-            "not equals" -> actual != expected
-            "contains" -> actual.contains(expected, ignoreCase = true)
-            "starts with" -> actual.startsWith(expected, ignoreCase = true)
-            "ends with" -> actual.endsWith(expected, ignoreCase = true)
-            "greater than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a > b }
-            } == true
-            "less than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a < b }
-            } == true
-            "exists" -> actual.isNotBlank()
-            "not exists" -> actual.isBlank()
-            else -> actual == expected
-        }
-    }
-
-    private fun lookupRaw(root: JSONObject, path: String): Any? {
-        val clean = path
-            .removePrefix("{{\\$json.")
-            .removeSuffix("}}")
-            .removePrefix("json.")
-
-        if (clean.isBlank() || clean == "json") return root
-
-        var current: Any = root
-        for (key in clean.split('.').filter { it.isNotBlank() }) {
-            current = when (current) {
-                is JSONObject -> current.opt(key) ?: return null
-                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
-                else -> return null
-            }
-        }
-
-        return current
-    }
-
-    private fun lookup(root: JSONObject, path: String): String? {
-        return lookupRaw(root, path)?.let {
-            if (it == JSONObject.NULL) null else it.toString()
-        }
-    }
-
-    private fun render(
-        source: String,
-        data: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        var result = source
-        result = result.replace("{{\\$now}}", now())
-        result = result.replace("{{\\$json}}", data.toString())
-
-        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
-        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
-            val key = match.groupValues.getOrElse(1) { "" }
-            result = result.replace(
-                match.value,
-                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
-            )
-        }
-
-        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
-        varsPattern.findAll(result).toList().asReversed().forEach { match ->
-            result = result.replace(
-                match.value,
-                variables[match.groupValues[1]].orEmpty()
-            )
-        }
-
-        return result
-    }
-
-    private fun callOpenAiCompatible(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
-
-        val body = JSONObject().apply {
-            put("model", model)
-            put(
-                "messages",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put("content", prompt)
-                )
-            )
-            put("temperature", temperature)
-        }
-
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -3356,10 +2654,10 @@ class WorkflowEngine(private val context: Context) {
                     input,
                     variables
                 )
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
                 NodeResult(JSONObject(input.toString()).apply {
                     put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
+                    put("_webhookStatus", status)
                 })
             }
 
@@ -3407,14 +2705,10 @@ class WorkflowEngine(private val context: Context) {
             "AI Text", "AI Agent" -> {
                 val provider = c.optString("provider", "OpenAI-compatible")
                 val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
                 val answer = if (provider == "Gemini") {
                     callGemini(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -3422,7 +2716,7 @@ class WorkflowEngine(private val context: Context) {
                 } else {
                     callOpenAiCompatible(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -3436,52 +2730,6 @@ class WorkflowEngine(private val context: Context) {
 
             else -> NodeResult(JSONObject(input.toString()))
         }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
     }
 
     private fun renderExpressionField(
@@ -3522,9 +2770,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -3719,8 +2967,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -3897,17 +3144,8 @@ class WorkflowEngine(private val context: Context) {
             }
 
             "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
+                val body = render(
+                    c.optString("body").ifBlank { "{{" + '
                 val url = render(c.optString("url"), input, variables)
                 if (!background && url.isNotBlank()) {
                     context.startActivity(
@@ -3992,7 +3230,7 @@ class WorkflowEngine(private val context: Context) {
         val sub = WorkflowStore.load(context, workflowId)
             ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
 
-        val latch = CountDownLatch(1)
+        val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
         var message = "Sub-workflow did not finish"
         var output = JSONObject()
@@ -4001,15 +3239,14 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
+                override fun onStatus(status: String) = report("Sub-workflow: " + status)
+                override fun onLog(log: String) = report("Sub-workflow log: " + log)
 
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
+                override fun onFinished(
+                    success: Boolean,
+                    result: String,
+                    finalOutput: JSONObject
+                ) {
                     ok = success
                     message = result
                     output = JSONObject(finalOutput.toString())
@@ -4019,10 +3256,9 @@ class WorkflowEngine(private val context: Context) {
             background = background
         )
 
-        latch.await(10, TimeUnit.MINUTES)
+        latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
 
-        report("Sub-workflow completed")
         return NodeResult(output)
     }
 
@@ -4064,9 +3300,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -4261,8 +3497,470 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
+        return json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
+                .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callGemini(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        val base = endpoint.ifBlank {
+            "https://generativelanguage.googleapis.com/v1beta/models/" +
+                model + ":generateContent"
+        }
+
+        val url = if (base.contains("?")) {
+            base + "&key=" + key
+        } else {
+            base + "?key=" + key
+        }
+
+        val body = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", prompt))
+                    )
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().put("temperature", temperature)
+            )
+        }
+
+        val json = postJson(url, "", body)
+
+        return json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.toString()
+    }
+
+    private fun postJson(
+        endpoint: String,
+        key: String,
+        body: JSONObject
+    ): JSONObject {
+        return postJsonWithHeaders(endpoint, key, body, emptyMap())
+    }
+
+    private fun postJsonWithHeaders(
+        endpoint: String,
+        key: String,
+        body: JSONObject,
+        extraHeaders: Map<String, String>
+    ): JSONObject {
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) {
+                setRequestProperty("Authorization", "Bearer " + key)
+            }
+            extraHeaders.forEach { pair ->
+                setRequestProperty(pair.key, pair.value)
+            }
+        }
+
+        connection.outputStream.use {
+            it.write(body.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val text = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+
+        connection.disconnect()
+
+        if (code >= 400) {
+            throw IllegalStateException(
+                "Request failed (" + code + "): " + text.take(180)
+            )
+        }
+
+        return runCatching { JSONObject(text) }
+            .getOrElse { JSONObject().put("body", text) }
+    }
+
+    private fun postNotification(title: String, message: String) {
+        val manager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "naten_runs"
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "NATEN workflow results",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(context, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+
+        manager.notify(
+            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+            builder
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(message.take(140))
+                .setAutoCancel(true)
+                .build()
+        )
+    }
+
+    private fun now(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+}
+ + "json}}" },
+                    input,
+                    variables
+                )
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("_webhookResponse", body)
+                    put("_webhookStatus", status)
+                })
+            }
+
+            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
+
+            "Open URL" -> {
+                val url = render(c.optString("url"), input, variables)
+                if (!background && url.isNotBlank()) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Opened " + url)
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Share Text" -> {
+                val text = render(c.optString("text"), input, variables)
+                if (!background) {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        this.type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(
+                        Intent.createChooser(send, "Share with…")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Share sheet opened")
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Stop / Error" -> {
+                val body = render(c.optString("message", "Stopped"), input, variables)
+                NodeResult(
+                    JSONObject(input.toString()),
+                    stop = true,
+                    success = false,
+                    message = body
+                )
+            }
+
+            "AI Text", "AI Agent" -> {
+                val provider = c.optString("provider", "OpenAI-compatible")
+                val prompt = render(c.optString("prompt"), input, variables)
+                val answer = if (provider == "Gemini") {
+                    callGemini(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                } else {
+                    callOpenAiCompatible(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                }
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("text", answer)
+                    put("ai", answer)
+                })
+            }
+
+            else -> NodeResult(JSONObject(input.toString()))
+        }
+    }
+
+    private fun renderExpressionField(
+        c: JSONObject,
+        field: String,
+        input: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        val value = c.optString("value")
+        if (value.isNotBlank()) return render(value, input, variables)
+        return lookup(input, field).orEmpty()
+    }
+
+    private fun executeHttp(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val method = c.optString("method", "GET").uppercase(Locale.US)
+        val urlText = render(c.optString("url"), input, variables)
+        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
+
+        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 15_000
+            readTimeout = 45_000
+            useCaches = false
+            doInput = true
+        }
+
+        parseHeaders(render(c.optString("headers"), input, variables))
+            .forEach { pair ->
+                connection.setRequestProperty(pair.key, pair.value)
+            }
+
+        val credentialName = c.optString("credentialName").trim()
+        if (credentialName.isNotBlank()) {
+            val secret = CredentialVault.get(context, credentialName)
+                ?: throw IllegalStateException("Credential not found: " + credentialName)
+            val header = c.optString("credentialHeader", "Authorization")
+            val prefix = c.optString("credentialPrefix", "Bearer ")
+            connection.setRequestProperty(header, prefix + secret)
+        }
+
+        if (method != "GET" && method != "HEAD") {
+            connection.doOutput = true
+            val body = render(c.optString("body"), input, variables)
+            if (body.isNotBlank()) {
+                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
+                    connection.setRequestProperty("Content-Type", "application/json")
+                }
+                connection.outputStream.use {
+                    it.write(body.toByteArray(Charsets.UTF_8))
+                }
+            }
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val body = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+        connection.disconnect()
+
+        report("HTTP " + method + " " + code + " " + urlText.take(80))
+
+        val out = JSONObject().apply {
+            put("statusCode", code)
+            put("ok", code < 400)
+            put("body", body)
+            if (body.trim().startsWith("{")) {
+                runCatching { put("json", JSONObject(body)) }
+            }
+            if (body.trim().startsWith("[")) {
+                runCatching { put("json", JSONArray(body)) }
+            }
+        }
+
+        if (code >= 400) {
+            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
+        }
+
+        return NodeResult(out)
+    }
+
+    private fun executeGraphQl(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val url = render(c.optString("url"), input, variables)
+        require(url.isNotBlank()) { "GraphQL node needs a URL." }
+
+        val variablesText = render(c.optString("variables", "{}"), input, variables)
+        val body = JSONObject().apply {
+            put("query", render(c.optString("query"), input, variables))
+            put(
+                "variables",
+                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
+            )
+        }
+
+        val response = postJsonWithHeaders(
+            url,
+            "",
+            body,
+            parseHeaders(render(c.optString("headers"), input, variables))
+        )
+        report("GraphQL request completed")
+        return NodeResult(response)
+    }
+
+    private fun parsePairs(text: String): List<Pair<String, String>> {
+        return text.lines().mapNotNull { line ->
+            val clean = line.trim()
+            val index = clean.indexOf('=')
+            if (index <= 0) null
+            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
+        }
+    }
+
+    private fun parseHeaders(text: String): Map<String, String> {
+        return text.lines().mapNotNull { line ->
+            val index = line.indexOf(':')
+            if (index <= 0) null
+            else line.substring(0, index).trim() to line.substring(index + 1).trim()
+        }.toMap()
+    }
+
+    private fun safeFileName(value: String): String {
+        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
+        return clean.substringAfterLast('/').ifBlank { "file.txt" }
+    }
+
+    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
+        val actual = actualRaw.trim()
+        val expected = expectedRaw.trim()
+
+        return when (op.lowercase(Locale.US)) {
+            "equals" -> actual == expected
+            "not equals" -> actual != expected
+            "contains" -> actual.contains(expected, ignoreCase = true)
+            "starts with" -> actual.startsWith(expected, ignoreCase = true)
+            "ends with" -> actual.endsWith(expected, ignoreCase = true)
+            "greater than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a > b }
+            } == true
+            "less than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a < b }
+            } == true
+            "exists" -> actual.isNotBlank()
+            "not exists" -> actual.isBlank()
+            else -> actual == expected
+        }
+    }
+
+    private fun lookupRaw(root: JSONObject, path: String): Any? {
+        val clean = path
+            .removePrefix("{{\\$json.")
+            .removeSuffix("}}")
+            .removePrefix("json.")
+
+        if (clean.isBlank() || clean == "json") return root
+
+        var current: Any = root
+        for (key in clean.split('.').filter { it.isNotBlank() }) {
+            current = when (current) {
+                is JSONObject -> current.opt(key) ?: return null
+                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
+                else -> return null
+            }
+        }
+
+        return current
+    }
+
+    private fun lookup(root: JSONObject, path: String): String? {
+        return lookupRaw(root, path)?.let {
+            if (it == JSONObject.NULL) null else it.toString()
+        }
+    }
+
+    private fun render(
+        source: String,
+        data: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        var result = source
+        result = result.replace("{{\\$now}}", now())
+        result = result.replace("{{\\$json}}", data.toString())
+
+        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
+        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
+            val key = match.groupValues.getOrElse(1) { "" }
+            result = result.replace(
+                match.value,
+                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
+            )
+        }
+
+        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
+        varsPattern.findAll(result).toList().asReversed().forEach { match ->
+            result = result.replace(
+                match.value,
+                variables[match.groupValues[1]].orEmpty()
+            )
+        }
+
+        return result
+    }
+
+    private fun callOpenAiCompatible(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put(
+                "messages",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", prompt)
+                )
+            )
+            put("temperature", temperature)
+        }
+
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -4460,550 +4158,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
-        return json.optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
-            ?.optString("content")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.optString("output")
-                .ifBlank { json.optString("text") }
-                .ifBlank { json.toString() }
-    }
-
-    private fun callGemini(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        val base = endpoint.ifBlank {
-            "https://generativelanguage.googleapis.com/v1beta/models/" +
-                model + ":generateContent"
-        }
-
-        val url = if (base.contains("?")) {
-            base + "&key=" + key
-        } else {
-            base + "?key=" + key
-        }
-
-        val body = JSONObject().apply {
-            put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", prompt))
-                    )
-                )
-            )
-            put(
-                "generationConfig",
-                JSONObject().put("temperature", temperature)
-            )
-        }
-
-        val json = postJson(url, "", body)
-
-        return json.optJSONArray("candidates")
-            ?.optJSONObject(0)
-            ?.optJSONObject("content")
-            ?.optJSONArray("parts")
-            ?.optJSONObject(0)
-            ?.optString("text")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.toString()
-    }
-
-    private fun postJson(
-        endpoint: String,
-        key: String,
-        body: JSONObject
-    ): JSONObject {
-        return postJsonWithHeaders(endpoint, key, body, emptyMap())
-    }
-
-    private fun postJsonWithHeaders(
-        endpoint: String,
-        key: String,
-        body: JSONObject,
-        extraHeaders: Map<String, String>
-    ): JSONObject {
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            doInput = true
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            if (key.isNotBlank()) {
-                setRequestProperty("Authorization", "Bearer " + key)
-            }
-            extraHeaders.forEach { pair ->
-                setRequestProperty(pair.key, pair.value)
-            }
-        }
-
-        connection.outputStream.use {
-            it.write(body.toString().toByteArray(Charsets.UTF_8))
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val text = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-
-        connection.disconnect()
-
-        if (code >= 400) {
-            throw IllegalStateException(
-                "Request failed (" + code + "): " + text.take(180)
-            )
-        }
-
-        return runCatching { JSONObject(text) }
-            .getOrElse { JSONObject().put("body", text) }
-    }
-
-    private fun postNotification(title: String, message: String) {
-        val manager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "naten_runs"
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    channelId,
-                    "NATEN workflow results",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
-            )
-        }
-
-        val builder = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(context, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
-
-        manager.notify(
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-            builder
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(title)
-                .setContentText(message.take(140))
-                .setAutoCancel(true)
-                .build()
-        )
-    }
-
-    private fun now(): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-}
- + "json}}"
-                }
-                val file = java.io.File(context.filesDir, name)
-                file.writeText(render(expression, input, variables))
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("fileName", name)
-                    put("filePath", file.absolutePath)
-                })
-            }
-
-            "Set Variable" -> {
-                val key = c.optString("key", "value")
-                val value = render(c.optString("value"), input, variables)
-                variables[key] = value
-                NodeResult(JSONObject(input.toString()).apply { put(key, value) })
-            }
-
-            "Log" -> {
-                report(render(c.optString("message", "Log"), input, variables))
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Notification" -> {
-                val title = render(c.optString("title", "NATEN"), input, variables)
-                val body = render(c.optString("message", "Workflow finished"), input, variables)
-                postNotification(title, body)
-                report("Notification sent")
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
-                val url = render(c.optString("url"), input, variables)
-                if (!background && url.isNotBlank()) {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Opened " + url)
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Share Text" -> {
-                val text = render(c.optString("text"), input, variables)
-                if (!background) {
-                    val send = Intent(Intent.ACTION_SEND).apply {
-                        this.type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, text)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(
-                        Intent.createChooser(send, "Share with…")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Share sheet opened")
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Stop / Error" -> {
-                val body = render(c.optString("message", "Stopped"), input, variables)
-                NodeResult(
-                    JSONObject(input.toString()),
-                    stop = true,
-                    success = false,
-                    message = body
-                )
-            }
-
-            "AI Text", "AI Agent" -> {
-                val provider = c.optString("provider", "OpenAI-compatible")
-                val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
-                val answer = if (provider == "Gemini") {
-                    callGemini(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                } else {
-                    callOpenAiCompatible(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                }
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("text", answer)
-                    put("ai", answer)
-                })
-            }
-
-            else -> NodeResult(JSONObject(input.toString()))
-        }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
-    }
-
-    private fun renderExpressionField(
-        c: JSONObject,
-        field: String,
-        input: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        val value = c.optString("value")
-        if (value.isNotBlank()) return render(value, input, variables)
-        return lookup(input, field).orEmpty()
-    }
-
-    private fun executeHttp(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val method = c.optString("method", "GET").uppercase(Locale.US)
-        val urlText = render(c.optString("url"), input, variables)
-        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
-
-        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = 45_000
-            useCaches = false
-            doInput = true
-        }
-
-        parseHeaders(render(c.optString("headers"), input, variables))
-            .forEach { pair ->
-                connection.setRequestProperty(pair.key, pair.value)
-            }
-
-        val credentialName = c.optString("credentialName").trim()
-        if (credentialName.isNotBlank()) {
-            val secret = CredentialVault.get(context, credentialName)
-                ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
-            val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
-        }
-
-        if (method != "GET" && method != "HEAD") {
-            connection.doOutput = true
-            val body = render(c.optString("body"), input, variables)
-            if (body.isNotBlank()) {
-                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
-                    connection.setRequestProperty("Content-Type", "application/json")
-                }
-                connection.outputStream.use {
-                    it.write(body.toByteArray(Charsets.UTF_8))
-                }
-            }
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val body = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-        connection.disconnect()
-
-        report("HTTP " + method + " " + code + " " + urlText.take(80))
-
-        val out = JSONObject().apply {
-            put("statusCode", code)
-            put("ok", code < 400)
-            put("body", body)
-            if (body.trim().startsWith("{")) {
-                runCatching { put("json", JSONObject(body)) }
-            }
-            if (body.trim().startsWith("[")) {
-                runCatching { put("json", JSONArray(body)) }
-            }
-        }
-
-        if (code >= 400) {
-            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
-        }
-
-        return NodeResult(out)
-    }
-
-    private fun executeGraphQl(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val url = render(c.optString("url"), input, variables)
-        require(url.isNotBlank()) { "GraphQL node needs a URL." }
-
-        val variablesText = render(c.optString("variables", "{}"), input, variables)
-        val body = JSONObject().apply {
-            put("query", render(c.optString("query"), input, variables))
-            put(
-                "variables",
-                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
-            )
-        }
-
-        val response = postJsonWithHeaders(
-            url,
-            "",
-            body,
-            parseHeaders(render(c.optString("headers"), input, variables))
-        )
-        report("GraphQL request completed")
-        return NodeResult(response)
-    }
-
-    private fun parsePairs(text: String): List<Pair<String, String>> {
-        return text.lines().mapNotNull { line ->
-            val clean = line.trim()
-            val index = clean.indexOf('=')
-            if (index <= 0) null
-            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
-        }
-    }
-
-    private fun parseHeaders(text: String): Map<String, String> {
-        return text.lines().mapNotNull { line ->
-            val index = line.indexOf(':')
-            if (index <= 0) null
-            else line.substring(0, index).trim() to line.substring(index + 1).trim()
-        }.toMap()
-    }
-
-    private fun safeFileName(value: String): String {
-        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
-        return clean.substringAfterLast('/').ifBlank { "file.txt" }
-    }
-
-    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
-        val actual = actualRaw.trim()
-        val expected = expectedRaw.trim()
-
-        return when (op.lowercase(Locale.US)) {
-            "equals" -> actual == expected
-            "not equals" -> actual != expected
-            "contains" -> actual.contains(expected, ignoreCase = true)
-            "starts with" -> actual.startsWith(expected, ignoreCase = true)
-            "ends with" -> actual.endsWith(expected, ignoreCase = true)
-            "greater than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a > b }
-            } == true
-            "less than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a < b }
-            } == true
-            "exists" -> actual.isNotBlank()
-            "not exists" -> actual.isBlank()
-            else -> actual == expected
-        }
-    }
-
-    private fun lookupRaw(root: JSONObject, path: String): Any? {
-        val clean = path
-            .removePrefix("{{\\$json.")
-            .removeSuffix("}}")
-            .removePrefix("json.")
-
-        if (clean.isBlank() || clean == "json") return root
-
-        var current: Any = root
-        for (key in clean.split('.').filter { it.isNotBlank() }) {
-            current = when (current) {
-                is JSONObject -> current.opt(key) ?: return null
-                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
-                else -> return null
-            }
-        }
-
-        return current
-    }
-
-    private fun lookup(root: JSONObject, path: String): String? {
-        return lookupRaw(root, path)?.let {
-            if (it == JSONObject.NULL) null else it.toString()
-        }
-    }
-
-    private fun render(
-        source: String,
-        data: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        var result = source
-        result = result.replace("{{\\$now}}", now())
-        result = result.replace("{{\\$json}}", data.toString())
-
-        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
-        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
-            val key = match.groupValues.getOrElse(1) { "" }
-            result = result.replace(
-                match.value,
-                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
-            )
-        }
-
-        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
-        varsPattern.findAll(result).toList().asReversed().forEach { match ->
-            result = result.replace(
-                match.value,
-                variables[match.groupValues[1]].orEmpty()
-            )
-        }
-
-        return result
-    }
-
-    private fun callOpenAiCompatible(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
-
-        val body = JSONObject().apply {
-            put("model", model)
-            put(
-                "messages",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put("content", prompt)
-                )
-            )
-            put("temperature", temperature)
-        }
-
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -5153,10 +4308,10 @@ class WorkflowEngine(private val context: Context) {
                     input,
                     variables
                 )
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
                 NodeResult(JSONObject(input.toString()).apply {
                     put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
+                    put("_webhookStatus", status)
                 })
             }
 
@@ -5204,14 +4359,10 @@ class WorkflowEngine(private val context: Context) {
             "AI Text", "AI Agent" -> {
                 val provider = c.optString("provider", "OpenAI-compatible")
                 val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
                 val answer = if (provider == "Gemini") {
                     callGemini(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -5219,7 +4370,7 @@ class WorkflowEngine(private val context: Context) {
                 } else {
                     callOpenAiCompatible(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -5233,52 +4384,6 @@ class WorkflowEngine(private val context: Context) {
 
             else -> NodeResult(JSONObject(input.toString()))
         }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
     }
 
     private fun renderExpressionField(
@@ -5319,9 +4424,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -5516,8 +4621,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -5694,17 +4798,8 @@ class WorkflowEngine(private val context: Context) {
             }
 
             "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
+                val body = render(
+                    c.optString("body").ifBlank { "{{" + '
                 val url = render(c.optString("url"), input, variables)
                 if (!background && url.isNotBlank()) {
                     context.startActivity(
@@ -5789,7 +4884,7 @@ class WorkflowEngine(private val context: Context) {
         val sub = WorkflowStore.load(context, workflowId)
             ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
 
-        val latch = CountDownLatch(1)
+        val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
         var message = "Sub-workflow did not finish"
         var output = JSONObject()
@@ -5798,15 +4893,14 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
+                override fun onStatus(status: String) = report("Sub-workflow: " + status)
+                override fun onLog(log: String) = report("Sub-workflow log: " + log)
 
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
+                override fun onFinished(
+                    success: Boolean,
+                    result: String,
+                    finalOutput: JSONObject
+                ) {
                     ok = success
                     message = result
                     output = JSONObject(finalOutput.toString())
@@ -5816,10 +4910,9 @@ class WorkflowEngine(private val context: Context) {
             background = background
         )
 
-        latch.await(10, TimeUnit.MINUTES)
+        latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
 
-        report("Sub-workflow completed")
         return NodeResult(output)
     }
 
@@ -5861,9 +4954,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -6058,8 +5151,470 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
+        return json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
+                .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callGemini(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        val base = endpoint.ifBlank {
+            "https://generativelanguage.googleapis.com/v1beta/models/" +
+                model + ":generateContent"
+        }
+
+        val url = if (base.contains("?")) {
+            base + "&key=" + key
+        } else {
+            base + "?key=" + key
+        }
+
+        val body = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", prompt))
+                    )
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().put("temperature", temperature)
+            )
+        }
+
+        val json = postJson(url, "", body)
+
+        return json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.toString()
+    }
+
+    private fun postJson(
+        endpoint: String,
+        key: String,
+        body: JSONObject
+    ): JSONObject {
+        return postJsonWithHeaders(endpoint, key, body, emptyMap())
+    }
+
+    private fun postJsonWithHeaders(
+        endpoint: String,
+        key: String,
+        body: JSONObject,
+        extraHeaders: Map<String, String>
+    ): JSONObject {
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) {
+                setRequestProperty("Authorization", "Bearer " + key)
+            }
+            extraHeaders.forEach { pair ->
+                setRequestProperty(pair.key, pair.value)
+            }
+        }
+
+        connection.outputStream.use {
+            it.write(body.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val text = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+
+        connection.disconnect()
+
+        if (code >= 400) {
+            throw IllegalStateException(
+                "Request failed (" + code + "): " + text.take(180)
+            )
+        }
+
+        return runCatching { JSONObject(text) }
+            .getOrElse { JSONObject().put("body", text) }
+    }
+
+    private fun postNotification(title: String, message: String) {
+        val manager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "naten_runs"
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "NATEN workflow results",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(context, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+
+        manager.notify(
+            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+            builder
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(message.take(140))
+                .setAutoCancel(true)
+                .build()
+        )
+    }
+
+    private fun now(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+}
+ + "json}}" },
+                    input,
+                    variables
+                )
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("_webhookResponse", body)
+                    put("_webhookStatus", status)
+                })
+            }
+
+            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
+
+            "Open URL" -> {
+                val url = render(c.optString("url"), input, variables)
+                if (!background && url.isNotBlank()) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Opened " + url)
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Share Text" -> {
+                val text = render(c.optString("text"), input, variables)
+                if (!background) {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        this.type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(
+                        Intent.createChooser(send, "Share with…")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Share sheet opened")
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Stop / Error" -> {
+                val body = render(c.optString("message", "Stopped"), input, variables)
+                NodeResult(
+                    JSONObject(input.toString()),
+                    stop = true,
+                    success = false,
+                    message = body
+                )
+            }
+
+            "AI Text", "AI Agent" -> {
+                val provider = c.optString("provider", "OpenAI-compatible")
+                val prompt = render(c.optString("prompt"), input, variables)
+                val answer = if (provider == "Gemini") {
+                    callGemini(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                } else {
+                    callOpenAiCompatible(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                }
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("text", answer)
+                    put("ai", answer)
+                })
+            }
+
+            else -> NodeResult(JSONObject(input.toString()))
+        }
+    }
+
+    private fun renderExpressionField(
+        c: JSONObject,
+        field: String,
+        input: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        val value = c.optString("value")
+        if (value.isNotBlank()) return render(value, input, variables)
+        return lookup(input, field).orEmpty()
+    }
+
+    private fun executeHttp(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val method = c.optString("method", "GET").uppercase(Locale.US)
+        val urlText = render(c.optString("url"), input, variables)
+        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
+
+        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 15_000
+            readTimeout = 45_000
+            useCaches = false
+            doInput = true
+        }
+
+        parseHeaders(render(c.optString("headers"), input, variables))
+            .forEach { pair ->
+                connection.setRequestProperty(pair.key, pair.value)
+            }
+
+        val credentialName = c.optString("credentialName").trim()
+        if (credentialName.isNotBlank()) {
+            val secret = CredentialVault.get(context, credentialName)
+                ?: throw IllegalStateException("Credential not found: " + credentialName)
+            val header = c.optString("credentialHeader", "Authorization")
+            val prefix = c.optString("credentialPrefix", "Bearer ")
+            connection.setRequestProperty(header, prefix + secret)
+        }
+
+        if (method != "GET" && method != "HEAD") {
+            connection.doOutput = true
+            val body = render(c.optString("body"), input, variables)
+            if (body.isNotBlank()) {
+                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
+                    connection.setRequestProperty("Content-Type", "application/json")
+                }
+                connection.outputStream.use {
+                    it.write(body.toByteArray(Charsets.UTF_8))
+                }
+            }
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val body = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+        connection.disconnect()
+
+        report("HTTP " + method + " " + code + " " + urlText.take(80))
+
+        val out = JSONObject().apply {
+            put("statusCode", code)
+            put("ok", code < 400)
+            put("body", body)
+            if (body.trim().startsWith("{")) {
+                runCatching { put("json", JSONObject(body)) }
+            }
+            if (body.trim().startsWith("[")) {
+                runCatching { put("json", JSONArray(body)) }
+            }
+        }
+
+        if (code >= 400) {
+            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
+        }
+
+        return NodeResult(out)
+    }
+
+    private fun executeGraphQl(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val url = render(c.optString("url"), input, variables)
+        require(url.isNotBlank()) { "GraphQL node needs a URL." }
+
+        val variablesText = render(c.optString("variables", "{}"), input, variables)
+        val body = JSONObject().apply {
+            put("query", render(c.optString("query"), input, variables))
+            put(
+                "variables",
+                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
+            )
+        }
+
+        val response = postJsonWithHeaders(
+            url,
+            "",
+            body,
+            parseHeaders(render(c.optString("headers"), input, variables))
+        )
+        report("GraphQL request completed")
+        return NodeResult(response)
+    }
+
+    private fun parsePairs(text: String): List<Pair<String, String>> {
+        return text.lines().mapNotNull { line ->
+            val clean = line.trim()
+            val index = clean.indexOf('=')
+            if (index <= 0) null
+            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
+        }
+    }
+
+    private fun parseHeaders(text: String): Map<String, String> {
+        return text.lines().mapNotNull { line ->
+            val index = line.indexOf(':')
+            if (index <= 0) null
+            else line.substring(0, index).trim() to line.substring(index + 1).trim()
+        }.toMap()
+    }
+
+    private fun safeFileName(value: String): String {
+        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
+        return clean.substringAfterLast('/').ifBlank { "file.txt" }
+    }
+
+    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
+        val actual = actualRaw.trim()
+        val expected = expectedRaw.trim()
+
+        return when (op.lowercase(Locale.US)) {
+            "equals" -> actual == expected
+            "not equals" -> actual != expected
+            "contains" -> actual.contains(expected, ignoreCase = true)
+            "starts with" -> actual.startsWith(expected, ignoreCase = true)
+            "ends with" -> actual.endsWith(expected, ignoreCase = true)
+            "greater than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a > b }
+            } == true
+            "less than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a < b }
+            } == true
+            "exists" -> actual.isNotBlank()
+            "not exists" -> actual.isBlank()
+            else -> actual == expected
+        }
+    }
+
+    private fun lookupRaw(root: JSONObject, path: String): Any? {
+        val clean = path
+            .removePrefix("{{\\$json.")
+            .removeSuffix("}}")
+            .removePrefix("json.")
+
+        if (clean.isBlank() || clean == "json") return root
+
+        var current: Any = root
+        for (key in clean.split('.').filter { it.isNotBlank() }) {
+            current = when (current) {
+                is JSONObject -> current.opt(key) ?: return null
+                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
+                else -> return null
+            }
+        }
+
+        return current
+    }
+
+    private fun lookup(root: JSONObject, path: String): String? {
+        return lookupRaw(root, path)?.let {
+            if (it == JSONObject.NULL) null else it.toString()
+        }
+    }
+
+    private fun render(
+        source: String,
+        data: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        var result = source
+        result = result.replace("{{\\$now}}", now())
+        result = result.replace("{{\\$json}}", data.toString())
+
+        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
+        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
+            val key = match.groupValues.getOrElse(1) { "" }
+            result = result.replace(
+                match.value,
+                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
+            )
+        }
+
+        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
+        varsPattern.findAll(result).toList().asReversed().forEach { match ->
+            result = result.replace(
+                match.value,
+                variables[match.groupValues[1]].orEmpty()
+            )
+        }
+
+        return result
+    }
+
+    private fun callOpenAiCompatible(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put(
+                "messages",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", prompt)
+                )
+            )
+            put("temperature", temperature)
+        }
+
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -6280,550 +5835,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
-        return json.optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
-            ?.optString("content")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.optString("output")
-                .ifBlank { json.optString("text") }
-                .ifBlank { json.toString() }
-    }
-
-    private fun callGemini(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        val base = endpoint.ifBlank {
-            "https://generativelanguage.googleapis.com/v1beta/models/" +
-                model + ":generateContent"
-        }
-
-        val url = if (base.contains("?")) {
-            base + "&key=" + key
-        } else {
-            base + "?key=" + key
-        }
-
-        val body = JSONObject().apply {
-            put(
-                "contents",
-                JSONArray().put(
-                    JSONObject().put(
-                        "parts",
-                        JSONArray().put(JSONObject().put("text", prompt))
-                    )
-                )
-            )
-            put(
-                "generationConfig",
-                JSONObject().put("temperature", temperature)
-            )
-        }
-
-        val json = postJson(url, "", body)
-
-        return json.optJSONArray("candidates")
-            ?.optJSONObject(0)
-            ?.optJSONObject("content")
-            ?.optJSONArray("parts")
-            ?.optJSONObject(0)
-            ?.optString("text")
-            ?.takeIf { it.isNotBlank() }
-            ?: json.toString()
-    }
-
-    private fun postJson(
-        endpoint: String,
-        key: String,
-        body: JSONObject
-    ): JSONObject {
-        return postJsonWithHeaders(endpoint, key, body, emptyMap())
-    }
-
-    private fun postJsonWithHeaders(
-        endpoint: String,
-        key: String,
-        body: JSONObject,
-        extraHeaders: Map<String, String>
-    ): JSONObject {
-        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            doInput = true
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json")
-            if (key.isNotBlank()) {
-                setRequestProperty("Authorization", "Bearer " + key)
-            }
-            extraHeaders.forEach { pair ->
-                setRequestProperty(pair.key, pair.value)
-            }
-        }
-
-        connection.outputStream.use {
-            it.write(body.toString().toByteArray(Charsets.UTF_8))
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val text = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-
-        connection.disconnect()
-
-        if (code >= 400) {
-            throw IllegalStateException(
-                "Request failed (" + code + "): " + text.take(180)
-            )
-        }
-
-        return runCatching { JSONObject(text) }
-            .getOrElse { JSONObject().put("body", text) }
-    }
-
-    private fun postNotification(title: String, message: String) {
-        val manager =
-            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val channelId = "naten_runs"
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    channelId,
-                    "NATEN workflow results",
-                    NotificationManager.IMPORTANCE_DEFAULT
-                )
-            )
-        }
-
-        val builder = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(context, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(context)
-        }
-
-        manager.notify(
-            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
-            builder
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(title)
-                .setContentText(message.take(140))
-                .setAutoCancel(true)
-                .build()
-        )
-    }
-
-    private fun now(): String =
-        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-}
- + "json}}"
-                }
-                val file = java.io.File(context.filesDir, name)
-                file.writeText(render(expression, input, variables))
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("fileName", name)
-                    put("filePath", file.absolutePath)
-                })
-            }
-
-            "Set Variable" -> {
-                val key = c.optString("key", "value")
-                val value = render(c.optString("value"), input, variables)
-                variables[key] = value
-                NodeResult(JSONObject(input.toString()).apply { put(key, value) })
-            }
-
-            "Log" -> {
-                report(render(c.optString("message", "Log"), input, variables))
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Notification" -> {
-                val title = render(c.optString("title", "NATEN"), input, variables)
-                val body = render(c.optString("message", "Workflow finished"), input, variables)
-                postNotification(title, body)
-                report("Notification sent")
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
-                val url = render(c.optString("url"), input, variables)
-                if (!background && url.isNotBlank()) {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Opened " + url)
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Share Text" -> {
-                val text = render(c.optString("text"), input, variables)
-                if (!background) {
-                    val send = Intent(Intent.ACTION_SEND).apply {
-                        this.type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, text)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    context.startActivity(
-                        Intent.createChooser(send, "Share with…")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    report("Share sheet opened")
-                }
-                NodeResult(JSONObject(input.toString()))
-            }
-
-            "Stop / Error" -> {
-                val body = render(c.optString("message", "Stopped"), input, variables)
-                NodeResult(
-                    JSONObject(input.toString()),
-                    stop = true,
-                    success = false,
-                    message = body
-                )
-            }
-
-            "AI Text", "AI Agent" -> {
-                val provider = c.optString("provider", "OpenAI-compatible")
-                val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
-                val answer = if (provider == "Gemini") {
-                    callGemini(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                } else {
-                    callOpenAiCompatible(
-                        c.optString("endpoint"),
-                        apiKey,
-                        c.optString("model"),
-                        prompt,
-                        c.optDouble("temperature", 0.4)
-                    )
-                }
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("text", answer)
-                    put("ai", answer)
-                })
-            }
-
-            else -> NodeResult(JSONObject(input.toString()))
-        }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
-    }
-
-    private fun renderExpressionField(
-        c: JSONObject,
-        field: String,
-        input: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        val value = c.optString("value")
-        if (value.isNotBlank()) return render(value, input, variables)
-        return lookup(input, field).orEmpty()
-    }
-
-    private fun executeHttp(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val method = c.optString("method", "GET").uppercase(Locale.US)
-        val urlText = render(c.optString("url"), input, variables)
-        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
-
-        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 15_000
-            readTimeout = 45_000
-            useCaches = false
-            doInput = true
-        }
-
-        parseHeaders(render(c.optString("headers"), input, variables))
-            .forEach { pair ->
-                connection.setRequestProperty(pair.key, pair.value)
-            }
-
-        val credentialName = c.optString("credentialName").trim()
-        if (credentialName.isNotBlank()) {
-            val secret = CredentialVault.get(context, credentialName)
-                ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
-            val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
-        }
-
-        if (method != "GET" && method != "HEAD") {
-            connection.doOutput = true
-            val body = render(c.optString("body"), input, variables)
-            if (body.isNotBlank()) {
-                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
-                    connection.setRequestProperty("Content-Type", "application/json")
-                }
-                connection.outputStream.use {
-                    it.write(body.toByteArray(Charsets.UTF_8))
-                }
-            }
-        }
-
-        val code = connection.responseCode
-        val stream = if (code < 400) connection.inputStream else connection.errorStream
-        val body = stream?.let {
-            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
-                reader.readText()
-            }
-        } ?: ""
-        connection.disconnect()
-
-        report("HTTP " + method + " " + code + " " + urlText.take(80))
-
-        val out = JSONObject().apply {
-            put("statusCode", code)
-            put("ok", code < 400)
-            put("body", body)
-            if (body.trim().startsWith("{")) {
-                runCatching { put("json", JSONObject(body)) }
-            }
-            if (body.trim().startsWith("[")) {
-                runCatching { put("json", JSONArray(body)) }
-            }
-        }
-
-        if (code >= 400) {
-            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
-        }
-
-        return NodeResult(out)
-    }
-
-    private fun executeGraphQl(
-        c: JSONObject,
-        input: JSONObject,
-        variables: Map<String, String>,
-        report: (String) -> Unit
-    ): NodeResult {
-        val url = render(c.optString("url"), input, variables)
-        require(url.isNotBlank()) { "GraphQL node needs a URL." }
-
-        val variablesText = render(c.optString("variables", "{}"), input, variables)
-        val body = JSONObject().apply {
-            put("query", render(c.optString("query"), input, variables))
-            put(
-                "variables",
-                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
-            )
-        }
-
-        val response = postJsonWithHeaders(
-            url,
-            "",
-            body,
-            parseHeaders(render(c.optString("headers"), input, variables))
-        )
-        report("GraphQL request completed")
-        return NodeResult(response)
-    }
-
-    private fun parsePairs(text: String): List<Pair<String, String>> {
-        return text.lines().mapNotNull { line ->
-            val clean = line.trim()
-            val index = clean.indexOf('=')
-            if (index <= 0) null
-            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
-        }
-    }
-
-    private fun parseHeaders(text: String): Map<String, String> {
-        return text.lines().mapNotNull { line ->
-            val index = line.indexOf(':')
-            if (index <= 0) null
-            else line.substring(0, index).trim() to line.substring(index + 1).trim()
-        }.toMap()
-    }
-
-    private fun safeFileName(value: String): String {
-        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
-        return clean.substringAfterLast('/').ifBlank { "file.txt" }
-    }
-
-    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
-        val actual = actualRaw.trim()
-        val expected = expectedRaw.trim()
-
-        return when (op.lowercase(Locale.US)) {
-            "equals" -> actual == expected
-            "not equals" -> actual != expected
-            "contains" -> actual.contains(expected, ignoreCase = true)
-            "starts with" -> actual.startsWith(expected, ignoreCase = true)
-            "ends with" -> actual.endsWith(expected, ignoreCase = true)
-            "greater than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a > b }
-            } == true
-            "less than" -> actual.toDoubleOrNull()?.let { a ->
-                expected.toDoubleOrNull()?.let { b -> a < b }
-            } == true
-            "exists" -> actual.isNotBlank()
-            "not exists" -> actual.isBlank()
-            else -> actual == expected
-        }
-    }
-
-    private fun lookupRaw(root: JSONObject, path: String): Any? {
-        val clean = path
-            .removePrefix("{{\\$json.")
-            .removeSuffix("}}")
-            .removePrefix("json.")
-
-        if (clean.isBlank() || clean == "json") return root
-
-        var current: Any = root
-        for (key in clean.split('.').filter { it.isNotBlank() }) {
-            current = when (current) {
-                is JSONObject -> current.opt(key) ?: return null
-                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
-                else -> return null
-            }
-        }
-
-        return current
-    }
-
-    private fun lookup(root: JSONObject, path: String): String? {
-        return lookupRaw(root, path)?.let {
-            if (it == JSONObject.NULL) null else it.toString()
-        }
-    }
-
-    private fun render(
-        source: String,
-        data: JSONObject,
-        variables: Map<String, String>
-    ): String {
-        var result = source
-        result = result.replace("{{\\$now}}", now())
-        result = result.replace("{{\\$json}}", data.toString())
-
-        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
-        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
-            val key = match.groupValues.getOrElse(1) { "" }
-            result = result.replace(
-                match.value,
-                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
-            )
-        }
-
-        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
-        varsPattern.findAll(result).toList().asReversed().forEach { match ->
-            result = result.replace(
-                match.value,
-                variables[match.groupValues[1]].orEmpty()
-            )
-        }
-
-        return result
-    }
-
-    private fun callOpenAiCompatible(
-        endpoint: String,
-        key: String,
-        model: String,
-        prompt: String,
-        temperature: Double
-    ): String {
-        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
-
-        val body = JSONObject().apply {
-            put("model", model)
-            put(
-                "messages",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put("content", prompt)
-                )
-            )
-            put("temperature", temperature)
-        }
-
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -6973,10 +5985,10 @@ class WorkflowEngine(private val context: Context) {
                     input,
                     variables
                 )
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
                 NodeResult(JSONObject(input.toString()).apply {
                     put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
+                    put("_webhookStatus", status)
                 })
             }
 
@@ -7024,14 +6036,10 @@ class WorkflowEngine(private val context: Context) {
             "AI Text", "AI Agent" -> {
                 val provider = c.optString("provider", "OpenAI-compatible")
                 val prompt = render(c.optString("prompt"), input, variables)
-                val credentialName = c.optString("credentialName").trim()
-                val apiKey = c.optString("apiKey").ifBlank {
-                    if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
-                }
                 val answer = if (provider == "Gemini") {
                     callGemini(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -7039,7 +6047,7 @@ class WorkflowEngine(private val context: Context) {
                 } else {
                     callOpenAiCompatible(
                         c.optString("endpoint"),
-                        apiKey,
+                        c.optString("apiKey"),
                         c.optString("model"),
                         prompt,
                         c.optDouble("temperature", 0.4)
@@ -7053,52 +6061,6 @@ class WorkflowEngine(private val context: Context) {
 
             else -> NodeResult(JSONObject(input.toString()))
         }
-    }
-
-    private fun executeSubWorkflow(
-        c: JSONObject,
-        input: JSONObject,
-        background: Boolean,
-        report: (String) -> Unit
-    ): NodeResult {
-        val workflowId = c.optString("workflowId").trim()
-        require(workflowId.isNotBlank()) { "Execute Sub-workflow needs a workflow id." }
-
-        val sub = WorkflowStore.load(context, workflowId)
-            ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
-
-        val latch = CountDownLatch(1)
-        var ok = false
-        var message = "Sub-workflow did not finish"
-        var output = JSONObject()
-
-        WorkflowEngine(context).runWithInput(
-            state = sub,
-            input = JSONObject(input.toString()),
-            listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
-
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
-                    ok = success
-                    message = result
-                    output = JSONObject(finalOutput.toString())
-                    latch.countDown()
-                }
-            },
-            background = background
-        )
-
-        latch.await(10, TimeUnit.MINUTES)
-        if (!ok) throw IllegalStateException(message)
-
-        report("Sub-workflow completed")
-        return NodeResult(output)
     }
 
     private fun renderExpressionField(
@@ -7139,9 +6101,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -7336,8 +6298,7 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
@@ -7514,17 +6475,8 @@ class WorkflowEngine(private val context: Context) {
             }
 
             "Respond to Webhook" -> {
-                val body = render(c.optString("body", "{{\\$json}}"), input, variables)
-                val statusCode = c.optInt("statusCode", 200).coerceIn(100, 599)
-                NodeResult(JSONObject(input.toString()).apply {
-                    put("_webhookResponse", body)
-                    put("_webhookStatus", statusCode)
-                })
-            }
-
-            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
-
-            "Open URL" -> {
+                val body = render(
+                    c.optString("body").ifBlank { "{{" + '
                 val url = render(c.optString("url"), input, variables)
                 if (!background && url.isNotBlank()) {
                     context.startActivity(
@@ -7609,7 +6561,7 @@ class WorkflowEngine(private val context: Context) {
         val sub = WorkflowStore.load(context, workflowId)
             ?: throw IllegalStateException("Sub-workflow not found: " + workflowId)
 
-        val latch = CountDownLatch(1)
+        val latch = java.util.concurrent.CountDownLatch(1)
         var ok = false
         var message = "Sub-workflow did not finish"
         var output = JSONObject()
@@ -7618,15 +6570,14 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) {
-                    report("Sub-workflow: " + status)
-                }
+                override fun onStatus(status: String) = report("Sub-workflow: " + status)
+                override fun onLog(log: String) = report("Sub-workflow log: " + log)
 
-                override fun onLog(log: String) {
-                    report("Sub-workflow log: " + log)
-                }
-
-                override fun onFinished(success: Boolean, result: String, finalOutput: JSONObject) {
+                override fun onFinished(
+                    success: Boolean,
+                    result: String,
+                    finalOutput: JSONObject
+                ) {
                     ok = success
                     message = result
                     output = JSONObject(finalOutput.toString())
@@ -7636,10 +6587,9 @@ class WorkflowEngine(private val context: Context) {
             background = background
         )
 
-        latch.await(10, TimeUnit.MINUTES)
+        latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
 
-        report("Sub-workflow completed")
         return NodeResult(output)
     }
 
@@ -7681,9 +6631,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val headerName = c.optString("credentialHeader", "Authorization")
+            val header = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(headerName, prefix + secret)
+            connection.setRequestProperty(header, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -7878,8 +6828,470 @@ class WorkflowEngine(private val context: Context) {
             put("temperature", temperature)
         }
 
-        val resolvedKey = if (key.isNotBlank()) key else ""
-        val json = postJson(endpoint, resolvedKey, body)
+        val json = postJson(endpoint, key, body)
+        return json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.optString("output")
+                .ifBlank { json.optString("text") }
+                .ifBlank { json.toString() }
+    }
+
+    private fun callGemini(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        val base = endpoint.ifBlank {
+            "https://generativelanguage.googleapis.com/v1beta/models/" +
+                model + ":generateContent"
+        }
+
+        val url = if (base.contains("?")) {
+            base + "&key=" + key
+        } else {
+            base + "?key=" + key
+        }
+
+        val body = JSONObject().apply {
+            put(
+                "contents",
+                JSONArray().put(
+                    JSONObject().put(
+                        "parts",
+                        JSONArray().put(JSONObject().put("text", prompt))
+                    )
+                )
+            )
+            put(
+                "generationConfig",
+                JSONObject().put("temperature", temperature)
+            )
+        }
+
+        val json = postJson(url, "", body)
+
+        return json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?.optJSONObject(0)
+            ?.optString("text")
+            ?.takeIf { it.isNotBlank() }
+            ?: json.toString()
+    }
+
+    private fun postJson(
+        endpoint: String,
+        key: String,
+        body: JSONObject
+    ): JSONObject {
+        return postJsonWithHeaders(endpoint, key, body, emptyMap())
+    }
+
+    private fun postJsonWithHeaders(
+        endpoint: String,
+        key: String,
+        body: JSONObject,
+        extraHeaders: Map<String, String>
+    ): JSONObject {
+        val connection = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15_000
+            readTimeout = 60_000
+            doInput = true
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            if (key.isNotBlank()) {
+                setRequestProperty("Authorization", "Bearer " + key)
+            }
+            extraHeaders.forEach { pair ->
+                setRequestProperty(pair.key, pair.value)
+            }
+        }
+
+        connection.outputStream.use {
+            it.write(body.toString().toByteArray(Charsets.UTF_8))
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val text = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+
+        connection.disconnect()
+
+        if (code >= 400) {
+            throw IllegalStateException(
+                "Request failed (" + code + "): " + text.take(180)
+            )
+        }
+
+        return runCatching { JSONObject(text) }
+            .getOrElse { JSONObject().put("body", text) }
+    }
+
+    private fun postNotification(title: String, message: String) {
+        val manager =
+            context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val channelId = "naten_runs"
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    channelId,
+                    "NATEN workflow results",
+                    NotificationManager.IMPORTANCE_DEFAULT
+                )
+            )
+        }
+
+        val builder = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(context, channelId)
+        } else {
+            @Suppress("DEPRECATION")
+            Notification.Builder(context)
+        }
+
+        manager.notify(
+            (System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+            builder
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentTitle(title)
+                .setContentText(message.take(140))
+                .setAutoCancel(true)
+                .build()
+        )
+    }
+
+    private fun now(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+}
+ + "json}}" },
+                    input,
+                    variables
+                )
+                val status = c.optInt("statusCode", 200).coerceIn(100, 599)
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("_webhookResponse", body)
+                    put("_webhookStatus", status)
+                })
+            }
+
+            "Execute Sub-workflow" -> executeSubWorkflow(c, input, background, report)
+
+            "Open URL" -> {
+                val url = render(c.optString("url"), input, variables)
+                if (!background && url.isNotBlank()) {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Opened " + url)
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Share Text" -> {
+                val text = render(c.optString("text"), input, variables)
+                if (!background) {
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        this.type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, text)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(
+                        Intent.createChooser(send, "Share with…")
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    )
+                    report("Share sheet opened")
+                }
+                NodeResult(JSONObject(input.toString()))
+            }
+
+            "Stop / Error" -> {
+                val body = render(c.optString("message", "Stopped"), input, variables)
+                NodeResult(
+                    JSONObject(input.toString()),
+                    stop = true,
+                    success = false,
+                    message = body
+                )
+            }
+
+            "AI Text", "AI Agent" -> {
+                val provider = c.optString("provider", "OpenAI-compatible")
+                val prompt = render(c.optString("prompt"), input, variables)
+                val answer = if (provider == "Gemini") {
+                    callGemini(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                } else {
+                    callOpenAiCompatible(
+                        c.optString("endpoint"),
+                        c.optString("apiKey"),
+                        c.optString("model"),
+                        prompt,
+                        c.optDouble("temperature", 0.4)
+                    )
+                }
+                NodeResult(JSONObject(input.toString()).apply {
+                    put("text", answer)
+                    put("ai", answer)
+                })
+            }
+
+            else -> NodeResult(JSONObject(input.toString()))
+        }
+    }
+
+    private fun renderExpressionField(
+        c: JSONObject,
+        field: String,
+        input: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        val value = c.optString("value")
+        if (value.isNotBlank()) return render(value, input, variables)
+        return lookup(input, field).orEmpty()
+    }
+
+    private fun executeHttp(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val method = c.optString("method", "GET").uppercase(Locale.US)
+        val urlText = render(c.optString("url"), input, variables)
+        require(urlText.isNotBlank()) { "HTTP node needs a URL." }
+
+        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 15_000
+            readTimeout = 45_000
+            useCaches = false
+            doInput = true
+        }
+
+        parseHeaders(render(c.optString("headers"), input, variables))
+            .forEach { pair ->
+                connection.setRequestProperty(pair.key, pair.value)
+            }
+
+        val credentialName = c.optString("credentialName").trim()
+        if (credentialName.isNotBlank()) {
+            val secret = CredentialVault.get(context, credentialName)
+                ?: throw IllegalStateException("Credential not found: " + credentialName)
+            val header = c.optString("credentialHeader", "Authorization")
+            val prefix = c.optString("credentialPrefix", "Bearer ")
+            connection.setRequestProperty(header, prefix + secret)
+        }
+
+        if (method != "GET" && method != "HEAD") {
+            connection.doOutput = true
+            val body = render(c.optString("body"), input, variables)
+            if (body.isNotBlank()) {
+                if (connection.getRequestProperty("Content-Type").isNullOrBlank()) {
+                    connection.setRequestProperty("Content-Type", "application/json")
+                }
+                connection.outputStream.use {
+                    it.write(body.toByteArray(Charsets.UTF_8))
+                }
+            }
+        }
+
+        val code = connection.responseCode
+        val stream = if (code < 400) connection.inputStream else connection.errorStream
+        val body = stream?.let {
+            BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { reader ->
+                reader.readText()
+            }
+        } ?: ""
+        connection.disconnect()
+
+        report("HTTP " + method + " " + code + " " + urlText.take(80))
+
+        val out = JSONObject().apply {
+            put("statusCode", code)
+            put("ok", code < 400)
+            put("body", body)
+            if (body.trim().startsWith("{")) {
+                runCatching { put("json", JSONObject(body)) }
+            }
+            if (body.trim().startsWith("[")) {
+                runCatching { put("json", JSONArray(body)) }
+            }
+        }
+
+        if (code >= 400) {
+            throw IllegalStateException("HTTP " + code + ": " + body.take(180))
+        }
+
+        return NodeResult(out)
+    }
+
+    private fun executeGraphQl(
+        c: JSONObject,
+        input: JSONObject,
+        variables: Map<String, String>,
+        report: (String) -> Unit
+    ): NodeResult {
+        val url = render(c.optString("url"), input, variables)
+        require(url.isNotBlank()) { "GraphQL node needs a URL." }
+
+        val variablesText = render(c.optString("variables", "{}"), input, variables)
+        val body = JSONObject().apply {
+            put("query", render(c.optString("query"), input, variables))
+            put(
+                "variables",
+                runCatching { JSONObject(variablesText) }.getOrElse { JSONObject() }
+            )
+        }
+
+        val response = postJsonWithHeaders(
+            url,
+            "",
+            body,
+            parseHeaders(render(c.optString("headers"), input, variables))
+        )
+        report("GraphQL request completed")
+        return NodeResult(response)
+    }
+
+    private fun parsePairs(text: String): List<Pair<String, String>> {
+        return text.lines().mapNotNull { line ->
+            val clean = line.trim()
+            val index = clean.indexOf('=')
+            if (index <= 0) null
+            else clean.substring(0, index).trim() to clean.substring(index + 1).trim()
+        }
+    }
+
+    private fun parseHeaders(text: String): Map<String, String> {
+        return text.lines().mapNotNull { line ->
+            val index = line.indexOf(':')
+            if (index <= 0) null
+            else line.substring(0, index).trim() to line.substring(index + 1).trim()
+        }.toMap()
+    }
+
+    private fun safeFileName(value: String): String {
+        val clean = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
+        return clean.substringAfterLast('/').ifBlank { "file.txt" }
+    }
+
+    private fun compare(actualRaw: String, expectedRaw: String, op: String): Boolean {
+        val actual = actualRaw.trim()
+        val expected = expectedRaw.trim()
+
+        return when (op.lowercase(Locale.US)) {
+            "equals" -> actual == expected
+            "not equals" -> actual != expected
+            "contains" -> actual.contains(expected, ignoreCase = true)
+            "starts with" -> actual.startsWith(expected, ignoreCase = true)
+            "ends with" -> actual.endsWith(expected, ignoreCase = true)
+            "greater than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a > b }
+            } == true
+            "less than" -> actual.toDoubleOrNull()?.let { a ->
+                expected.toDoubleOrNull()?.let { b -> a < b }
+            } == true
+            "exists" -> actual.isNotBlank()
+            "not exists" -> actual.isBlank()
+            else -> actual == expected
+        }
+    }
+
+    private fun lookupRaw(root: JSONObject, path: String): Any? {
+        val clean = path
+            .removePrefix("{{\\$json.")
+            .removeSuffix("}}")
+            .removePrefix("json.")
+
+        if (clean.isBlank() || clean == "json") return root
+
+        var current: Any = root
+        for (key in clean.split('.').filter { it.isNotBlank() }) {
+            current = when (current) {
+                is JSONObject -> current.opt(key) ?: return null
+                is JSONArray -> current.opt(key.toIntOrNull() ?: return null)
+                else -> return null
+            }
+        }
+
+        return current
+    }
+
+    private fun lookup(root: JSONObject, path: String): String? {
+        return lookupRaw(root, path)?.let {
+            if (it == JSONObject.NULL) null else it.toString()
+        }
+    }
+
+    private fun render(
+        source: String,
+        data: JSONObject,
+        variables: Map<String, String>
+    ): String {
+        var result = source
+        result = result.replace("{{\\$now}}", now())
+        result = result.replace("{{\\$json}}", data.toString())
+
+        val jsonPattern = Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
+        jsonPattern.findAll(result).toList().asReversed().forEach { match ->
+            val key = match.groupValues.getOrElse(1) { "" }
+            result = result.replace(
+                match.value,
+                if (key.isBlank()) data.toString() else lookup(data, key).orEmpty()
+            )
+        }
+
+        val varsPattern = Regex("\\{\\{\\$vars\\.([A-Za-z0-9_\\-.]+)\\}\\}")
+        varsPattern.findAll(result).toList().asReversed().forEach { match ->
+            result = result.replace(
+                match.value,
+                variables[match.groupValues[1]].orEmpty()
+            )
+        }
+
+        return result
+    }
+
+    private fun callOpenAiCompatible(
+        endpoint: String,
+        key: String,
+        model: String,
+        prompt: String,
+        temperature: Double
+    ): String {
+        require(endpoint.isNotBlank()) { "AI endpoint is empty." }
+
+        val body = JSONObject().apply {
+            put("model", model)
+            put(
+                "messages",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("content", prompt)
+                )
+            )
+            put("temperature", temperature)
+        }
+
+        val json = postJson(endpoint, key, body)
         return json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")

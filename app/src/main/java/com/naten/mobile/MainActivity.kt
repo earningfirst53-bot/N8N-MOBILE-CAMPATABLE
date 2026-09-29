@@ -1133,7 +1133,7 @@ class MainActivity : Activity() {
 
         val name = EditText(this).apply {
             hint = "Credential name"
-            singleLine = true
+            setSingleLine(true)
         }
         val value = EditText(this).apply {
             hint = "Secret / API key"
