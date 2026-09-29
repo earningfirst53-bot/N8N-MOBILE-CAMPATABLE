@@ -50,8 +50,16 @@ class WorkflowEngine(private val context: Context) {
 
                 val byId = state.nodes.associateBy { it.id }
                 val outgoing = state.edges.groupBy { it.from }
-                val startNodes = state.nodes.filter { it.type.endsWith("Trigger") }
-                    .ifEmpty { listOf(state.nodes.minByOrNull { it.id }!!) }
+                val preferred = if (background) {
+                    state.nodes.filter { it.type == "Schedule Trigger" }
+                } else {
+                    state.nodes.filter { it.type == "Manual Trigger" }
+                }
+                val startNodes = preferred.ifEmpty {
+                    state.nodes.filter { it.type.endsWith("Trigger") }
+                }.ifEmpty {
+                    listOf(state.nodes.minByOrNull { it.id }!!)
+                }
 
                 val queue = java.util.ArrayDeque<Int>()
                 startNodes.forEach { queue.add(it.id) }
