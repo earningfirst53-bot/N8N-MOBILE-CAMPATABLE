@@ -155,7 +155,7 @@ fun FlowNode.ensureDefaultConfig() {
             config.put("endpoint", "https://api.openai.com/v1/chat/completions")
             config.put("apiKey", "")
             config.put("model", "gpt-4o-mini")
-            config.put("prompt", "Summarize this: {{$json}}")
+            config.put("prompt", "Summarize this: {{\$json}}")
             config.put("temperature", 0.4)
         }
         "Code" -> {
@@ -173,13 +173,13 @@ fun FlowNode.ensureDefaultConfig() {
         "Read File" -> config.put("filename", "input.txt")
         "Write File" -> {
             config.put("filename", "output.txt")
-            config.put("data", "{{$json}}")
+            config.put("data", "{{\$json}}")
         }
         "Set Variable" -> {
             config.put("key", "name")
             config.put("value", "NATEN")
         }
-        "Log" -> config.put("message", "{{$json}}")
+        "Log" -> config.put("message", "{{\$json}}")
         "Stop / Error" -> config.put("message", "Stopped by workflow")
         "Webhook Trigger", "Manual Trigger", "Merge" -> Unit
     }
