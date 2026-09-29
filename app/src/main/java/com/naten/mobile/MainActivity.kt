@@ -10,7 +10,7 @@ import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
 
-private data class FlowNode(
+data class FlowNode(
     var id: Int,
     var type: String,
     var title: String,
@@ -215,6 +215,7 @@ class MainActivity : Activity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
     private fun dpF(v: Int): Float = v * resources.displayMetrics.density
+    private fun dpF(v: Float): Float = v * resources.displayMetrics.density
 
     inner class WorkflowCanvas(context: Context) : View(context) {
         val nodes = mutableListOf<FlowNode>()
