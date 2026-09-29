@@ -84,6 +84,7 @@ class WorkflowEngine(private val context: Context) {
                     put("trigger", if (background) "schedule" else "manual")
                     put("timestamp", now())
                 }
+                finalData = JSONObject(data.toString())
 
                 while (queue.isNotEmpty()) {
                     val id = queue.removeFirst()
@@ -591,8 +592,13 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) = report("Sub-workflow: " + status)
-                override fun onLog(log: String) = report("Sub-workflow log: " + log)
+                override fun onStatus(status: String) {
+                    report("Sub-workflow: " + status)
+                }
+
+                override fun onLog(log: String) {
+                    report("Sub-workflow log: " + log)
+                }
 
                 override fun onFinished(
                     success: Boolean,
@@ -610,7 +616,6 @@ class WorkflowEngine(private val context: Context) {
 
         latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
-
         return NodeResult(output)
     }
 
@@ -652,9 +657,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -1093,9 +1098,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -1562,8 +1567,13 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) = report("Sub-workflow: " + status)
-                override fun onLog(log: String) = report("Sub-workflow log: " + log)
+                override fun onStatus(status: String) {
+                    report("Sub-workflow: " + status)
+                }
+
+                override fun onLog(log: String) {
+                    report("Sub-workflow log: " + log)
+                }
 
                 override fun onFinished(
                     success: Boolean,
@@ -1581,7 +1591,6 @@ class WorkflowEngine(private val context: Context) {
 
         latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
-
         return NodeResult(output)
     }
 
@@ -1623,9 +1632,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -2086,9 +2095,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -2770,9 +2779,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -3239,8 +3248,13 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) = report("Sub-workflow: " + status)
-                override fun onLog(log: String) = report("Sub-workflow log: " + log)
+                override fun onStatus(status: String) {
+                    report("Sub-workflow: " + status)
+                }
+
+                override fun onLog(log: String) {
+                    report("Sub-workflow log: " + log)
+                }
 
                 override fun onFinished(
                     success: Boolean,
@@ -3258,7 +3272,6 @@ class WorkflowEngine(private val context: Context) {
 
         latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
-
         return NodeResult(output)
     }
 
@@ -3300,9 +3313,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -3763,9 +3776,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -4424,9 +4437,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -4893,8 +4906,13 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) = report("Sub-workflow: " + status)
-                override fun onLog(log: String) = report("Sub-workflow log: " + log)
+                override fun onStatus(status: String) {
+                    report("Sub-workflow: " + status)
+                }
+
+                override fun onLog(log: String) {
+                    report("Sub-workflow log: " + log)
+                }
 
                 override fun onFinished(
                     success: Boolean,
@@ -4912,7 +4930,6 @@ class WorkflowEngine(private val context: Context) {
 
         latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
-
         return NodeResult(output)
     }
 
@@ -4954,9 +4971,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -5417,9 +5434,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -6101,9 +6118,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -6570,8 +6587,13 @@ class WorkflowEngine(private val context: Context) {
             state = sub,
             input = JSONObject(input.toString()),
             listener = object : ExecutionListener {
-                override fun onStatus(status: String) = report("Sub-workflow: " + status)
-                override fun onLog(log: String) = report("Sub-workflow log: " + log)
+                override fun onStatus(status: String) {
+                    report("Sub-workflow: " + status)
+                }
+
+                override fun onLog(log: String) {
+                    report("Sub-workflow log: " + log)
+                }
 
                 override fun onFinished(
                     success: Boolean,
@@ -6589,7 +6611,6 @@ class WorkflowEngine(private val context: Context) {
 
         latch.await(10, java.util.concurrent.TimeUnit.MINUTES)
         if (!ok) throw IllegalStateException(message)
-
         return NodeResult(output)
     }
 
@@ -6631,9 +6652,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
@@ -7094,9 +7115,9 @@ class WorkflowEngine(private val context: Context) {
         if (credentialName.isNotBlank()) {
             val secret = CredentialVault.get(context, credentialName)
                 ?: throw IllegalStateException("Credential not found: " + credentialName)
-            val header = c.optString("credentialHeader", "Authorization")
+            val headerName = c.optString("credentialHeader", "Authorization")
             val prefix = c.optString("credentialPrefix", "Bearer ")
-            connection.setRequestProperty(header, prefix + secret)
+            connection.setRequestProperty(headerName, prefix + secret)
         }
 
         if (method != "GET" && method != "HEAD") {
