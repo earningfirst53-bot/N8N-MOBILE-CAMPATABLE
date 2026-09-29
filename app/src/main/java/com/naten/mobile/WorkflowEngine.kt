@@ -421,7 +421,7 @@ class WorkflowEngine(private val context: Context) {
 
     private fun lookup(root: JSONObject, path: String): String? {
         val clean = path
-            .removePrefix("\{\{\$json.")
+            .removePrefix("{{\$json.")
             .removeSuffix("}}")
             .removePrefix("json.")
 
@@ -445,8 +445,8 @@ class WorkflowEngine(private val context: Context) {
     private fun render(input: String, data: JSONObject, vars: Map<String, String>): String {
         var out = input
 
-        out = out.replace("\{\{\$now}}", now())
-        out = out.replace("\{\{\$json}}", data.toString())
+        out = out.replace("{{\$now}}", now())
+        out = out.replace("{{\$json}}", data.toString())
 
         Regex("\\{\\{\\$json(?:\\.([A-Za-z0-9_\\-.]+))?\\}\\}")
             .findAll(out).toList().asReversed().forEach { match ->
