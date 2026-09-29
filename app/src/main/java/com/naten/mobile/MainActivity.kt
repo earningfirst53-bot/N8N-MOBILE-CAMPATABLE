@@ -432,6 +432,9 @@ class MainActivity : Activity() {
                 fields["url"] = textField("url", "URL")
                 fields["headers"] = textField("headers", "Headers (one per line: Key: Value)", true)
                 fields["body"] = textField("body", "Body", true)
+                fields["credentialName"] = textField("credentialName", "Saved credential name (optional)")
+                fields["credentialHeader"] = textField("credentialHeader", "Credential header")
+                fields["credentialPrefix"] = textField("credentialPrefix", "Credential prefix")
             }
 
             "GraphQL" -> {
@@ -519,7 +522,9 @@ class MainActivity : Activity() {
             "AI Text", "AI Agent" -> {
                 spinners["provider"] = spinner("provider", "Provider", listOf("OpenAI-compatible", "Gemini"))
                 fields["endpoint"] = textField("endpoint", "Endpoint")
-                fields["apiKey"] = textField("apiKey", "API key")
+                fields["credentialName"] = textField("credentialName", "Saved credential name (optional)")
+                fields["apiKey"] = textField("apiKey", "API key (leave blank when using saved credential)")
+                fields["apiKey"]?.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 fields["model"] = textField("model", "Model")
                 fields["prompt"] = textField("prompt", "Prompt", true)
                 fields["temperature"] = textField("temperature", "Temperature")
@@ -557,6 +562,18 @@ class MainActivity : Activity() {
                     fields.forEach { pair -> node.config.put(pair.key, pair.value.text.toString()) }
                     spinners.forEach { pair ->
                         node.config.put(pair.key, pair.value.selectedItem.toString())
+                    }
+
+                    val credentialName = node.config.optString("credentialName").trim()
+                    val apiKey = node.config.optString("apiKey")
+                    if (credentialName.isNotBlank() && apiKey.isNotBlank()) {
+                        CredentialVault.put(this, credentialName, apiKey)
+                        node.config.put("apiKey", "")
+                        Toast.makeText(
+                            this,
+                            "Credential saved securely as " + credentialName,
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
 
@@ -828,6 +845,7 @@ class MainActivity : Activity() {
         val items = arrayOf(
             "Node Library",
             "Automation status",
+            "Credentials",
             "Import workflow JSON",
             "Export NATEN JSON",
             "Export n8n-style JSON",
@@ -841,15 +859,16 @@ class MainActivity : Activity() {
                 when (which) {
                     0 -> showNodeLibrary()
                     1 -> showAutomationStatus()
-                    2 -> importJson()
-                    3 -> exportJson(false)
-                    4 -> exportJson(true)
-                    5 -> {
+                    2 -> showCredentials()
+                    3 -> importJson()
+                    4 -> exportJson(false)
+                    5 -> exportJson(true)
+                    6 -> {
                         state = WorkflowStore.newWorkflow(this, "My Workflow")
                         refreshUi()
                         syncAutomation()
                     }
-                    6 -> showHelp()
+                    7 -> showHelp()
                 }
             }
             .show()
@@ -1049,6 +1068,81 @@ class MainActivity : Activity() {
             ".code" in value -> "Code"
             else -> "Generic API"
         }
+    }
+
+    private fun showCredentials() {
+        val names = CredentialVault.list(this)
+        val list = ListView(this)
+
+        if (names.isEmpty()) {
+            list.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_list_item_1,
+                listOf("No saved credentials yet.")
+            )
+        } else {
+            list.adapter = ArrayAdapter(
+                this,
+                android.R.layout.simple_list_item_1,
+                names
+            )
+            list.setOnItemClickListener { _, _, position, _ ->
+                val name = names[position]
+                AlertDialog.Builder(this)
+                    .setTitle("Delete credential?")
+                    .setMessage("Delete " + name + " from secure storage?")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete") { _, _ ->
+                        CredentialVault.delete(this, name)
+                        showCredentials()
+                    }
+                    .show()
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Saved credentials")
+            .setView(list)
+            .setNegativeButton("Close", null)
+            .setPositiveButton("Add") { _, _ ->
+                showAddCredential()
+            }
+            .show()
+    }
+
+    private fun showAddCredential() {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), 0, dp(8), 0)
+        }
+
+        val name = EditText(this).apply {
+            hint = "Credential name"
+            singleLine = true
+        }
+        val value = EditText(this).apply {
+            hint = "Secret / API key"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+
+        box.addView(name)
+        box.addView(value)
+
+        AlertDialog.Builder(this)
+            .setTitle("Add credential")
+            .setView(box)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save") { _, _ ->
+                val credentialName = name.text.toString().trim()
+                val secret = value.text.toString()
+                if (credentialName.isBlank() || secret.isBlank()) {
+                    Toast.makeText(this, "Both fields are required.", Toast.LENGTH_LONG).show()
+                } else {
+                    CredentialVault.put(this, credentialName, secret)
+                    Toast.makeText(this, "Credential saved.", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .show()
     }
 
     private fun showHelp() {
