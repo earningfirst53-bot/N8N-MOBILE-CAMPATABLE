@@ -59,14 +59,78 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        state = WorkflowStore.loadCurrent(this) ?: starterWorkflow()
-        state.nodes.forEach { it.ensureDefaultConfig() }
+        runCatching {
+            state = WorkflowStore.loadCurrent(this) ?: starterWorkflow()
+            state.nodes.forEach { it.ensureDefaultConfig() }
 
-        buildUi()
-        WorkflowStore.save(this, state)
-        refreshUi()
-        requestNotificationPermission()
-        syncAutomation()
+            buildUi()
+            WorkflowStore.save(this, state)
+            refreshUi()
+            requestNotificationPermission()
+
+            window.decorView.post {
+                runCatching {
+                    syncAutomation()
+                }.onFailure {
+                    setStatus("Automation paused", it.message ?: "Android blocked background startup")
+                }
+            }
+        }.onFailure { error ->
+            showStartupRecovery(error)
+        }
+    }
+
+    private fun showStartupRecovery(error: Throwable) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(28), dp(28), dp(28), dp(28))
+            setBackgroundColor(Color.rgb(19, 20, 23))
+        }
+
+        root.addView(TextView(this).apply {
+            text = "NATEN"
+            textSize = 28f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+        })
+        root.addView(TextView(this).apply {
+            text = "NATEN could not load the workspace."
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(224, 226, 231))
+            setPadding(0, dp(14), 0, dp(8))
+        })
+        root.addView(TextView(this).apply {
+            text = (error.message ?: error.javaClass.simpleName).take(500)
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(155, 159, 168))
+        })
+
+        val retry = n8nChromeButton("Restart workspace")
+        retry.setOnClickListener {
+            recreate()
+        }
+        root.addView(retry, LinearLayout.LayoutParams(-2, dp(44)).apply {
+            topMargin = dp(20)
+        })
+
+        val reset = n8nChromeButton("Reset local workflow")
+        reset.setOnClickListener {
+            getSharedPreferences("naten", Context.MODE_PRIVATE)
+                .edit()
+                .remove("currentWorkflowId")
+                .remove("workflow")
+                .apply()
+            recreate()
+        }
+        root.addView(reset, LinearLayout.LayoutParams(-2, dp(44)).apply {
+            topMargin = dp(8)
+        })
+
+        setContentView(root)
     }
 
     private fun buildUi() {
