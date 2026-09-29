@@ -234,7 +234,7 @@ fun FlowNode.ensureDefaultConfig() {
             config.put("headers", "")
         }
         "Webhook Trigger", "Chat Trigger" -> {
-            val suffix = id.take(8)
+            val suffix = id.toString().take(8)
             config.put("method", "POST")
             config.put("path", "hook/" + suffix)
         }
