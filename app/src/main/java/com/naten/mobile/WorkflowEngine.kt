@@ -606,8 +606,21 @@ class WorkflowEngine(private val context: Context) {
                     if (credentialName.isBlank()) "" else CredentialVault.get(context, credentialName).orEmpty()
                 }
                 val normalizedProvider = provider.lowercase(Locale.US)
-                val endpoint = c.optString("endpoint").ifBlank { defaultAiEndpoint(normalizedProvider) }
-                val model = c.optString("model").ifBlank { defaultAiModel(normalizedProvider) }
+                val configuredEndpoint = c.optString("endpoint").trim()
+                val endpoint = when {
+                    configuredEndpoint.isBlank() -> defaultAiEndpoint(normalizedProvider)
+                    normalizedProvider != "openai" &&
+                        configuredEndpoint == "https://api.openai.com/v1/chat/completions" ->
+                        defaultAiEndpoint(normalizedProvider)
+                    else -> configuredEndpoint
+                }
+                val configuredModel = c.optString("model").trim()
+                val model = if (
+                    normalizedProvider != "openai" &&
+                    configuredModel == "gpt-4o-mini"
+                ) defaultAiModel(normalizedProvider) else configuredModel.ifBlank {
+                    defaultAiModel(normalizedProvider)
+                }
                 val answer = when (normalizedProvider) {
                     "gemini" -> callGemini(
                         endpoint,
