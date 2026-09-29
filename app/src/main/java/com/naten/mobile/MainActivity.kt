@@ -1153,8 +1153,8 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
             val width = MeasureSpec.getSize(widthMeasureSpec)
             val height = MeasureSpec.getSize(heightMeasureSpec)
             setMeasuredDimension(width, height)
-            children.forEach {
-                it.measure(
+            for (i in 0 until childCount) {
+                getChildAt(i).measure(
                     MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
                     MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY)
                 )
