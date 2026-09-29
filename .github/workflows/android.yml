@@ -88,3 +88,12 @@ jobs:
           name: NATEN-debug-apk-polished-0.6.4
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      - name: Package complete source repository
+        run: git archive --format=zip --output=N8N-MOBILE-CAMPATABLE-main.zip HEAD
+      - name: Upload complete source repository
+        uses: actions/upload-artifact@v4
+        with:
+          name: N8N-MOBILE-CAMPATABLE-source
+          path: N8N-MOBILE-CAMPATABLE-main.zip
+          if-no-files-found: error
