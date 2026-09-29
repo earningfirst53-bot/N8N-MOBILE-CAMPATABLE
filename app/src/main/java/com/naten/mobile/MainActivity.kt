@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     private lateinit var activeSwitch: Switch
     private lateinit var editorFrame: FrameLayout
     private lateinit var breadcrumbView: TextView
+    private lateinit var breadcrumbView: TextView
     private var nodePanel: View? = null
 
     private var state = WorkflowState()
@@ -238,6 +239,7 @@ class MainActivity : Activity() {
             setOnClickListener { renameWorkflow() }
         }
         breadcrumbView = breadcrumb
+        breadcrumbView = breadcrumb
         topbar.addView(breadcrumb, LinearLayout.LayoutParams(0, -1, 1f))
 
         val editorTab = TextView(this).apply {
@@ -306,6 +308,13 @@ class MainActivity : Activity() {
             setStatus("Saved", "Workflow saved on this device.")
         }
         topbar.addView(save, LinearLayout.LayoutParams(-2, dp(34)).apply {
+            marginStart = dp(5)
+        })
+
+        val command = n8nChromeButton("⌘")
+        command.contentDescription = "Command center"
+        command.setOnClickListener { showCommandCenter() }
+        topbar.addView(command, LinearLayout.LayoutParams(dp(40), dp(34)).apply {
             marginStart = dp(5)
         })
 
@@ -440,7 +449,11 @@ class MainActivity : Activity() {
             putExtra(Intent.EXTRA_SUBJECT, state.name)
         }
         runCatching {
+            runCatching {
             startActivity(Intent.createChooser(intent, "Share workflow"))
+        }.onFailure {
+            Toast.makeText(this, "No app is available to share this workflow.", Toast.LENGTH_LONG).show()
+        }
         }.onFailure {
             Toast.makeText(this, "No app is available to share this workflow.", Toast.LENGTH_LONG).show()
         }
@@ -667,6 +680,8 @@ class MainActivity : Activity() {
             hint = "Node name"
             setText(node.title)
             textSize = 14f
+            setTextColor(Color.rgb(28, 31, 36))
+            setHintTextColor(Color.rgb(125, 130, 138))
         }
         form.addView(title)
 
@@ -674,7 +689,7 @@ class MainActivity : Activity() {
             form.addView(TextView(this).apply {
                 text = value
                 textSize = 12f
-                setTextColor(Color.rgb(92, 98, 108))
+                setTextColor(Color.rgb(215, 218, 224))
                 setPadding(0, dp(8), 0, dp(2))
             })
         }
@@ -2102,12 +2117,12 @@ Generic API/HTTP/GraphQL nodes are the universal escape hatch for services that 
         private fun isOutput(node: FlowNode, x: Float, y: Float): Boolean {
             val hx = node.x + nodeW
             val hy = node.y + nodeH / 2f
-            return distance(x, y, hx, hy) <= dpF(18f)
+            return distance(x, y, hx, hy) <= dpF(24f)
         }
 
         private fun findInput(x: Float, y: Float): FlowNode? =
             state.nodes.asReversed().firstOrNull {
-                distance(x, y, it.x, it.y + nodeH / 2f) <= dpF(24f)
+                distance(x, y, it.x, it.y + nodeH / 2f) <= dpF(30f)
             }
 
         private fun findNode(x: Float, y: Float): FlowNode? =
