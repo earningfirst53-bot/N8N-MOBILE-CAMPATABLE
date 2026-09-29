@@ -35,7 +35,7 @@ class AutomationService : Service() {
         startAsForeground("NATEN automation active", "Background automation is running")
 
         when (intent?.action) {
-            null, ACTION_START -> {
+            ACTION_RUN -> {
                 val workflowId = WorkflowScheduler.workflowId(intent)
                 val state = workflowId?.let { WorkflowStore.load(this, it) }
                     ?: WorkflowStore.loadCurrent(this)
@@ -60,6 +60,8 @@ class AutomationService : Service() {
                     startWebhookServer()
                 }
             }
+
+            else -> Unit
         }
 
         val keepAlive = webServer != null
