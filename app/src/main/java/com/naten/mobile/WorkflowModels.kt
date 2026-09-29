@@ -6,161 +6,46 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-data class FlowNode(
-    var id: Int,
-    var type: String,
-    var title: String,
-    var x: Float,
-    var y: Float,
-    var config: JSONObject = JSONObject()
-)
-
-data class FlowEdge(
-    var from: Int,
-    var to: Int,
-    var branch: String = ""
-)
-
-data class WorkflowState(
-    var id: String = UUID.randomUUID().toString(),
-    var name: String = "My Workflow",
-    val nodes: MutableList<FlowNode> = mutableListOf(),
-    val edges: MutableList<FlowEdge> = mutableListOf(),
-    var active: Boolean = false
-)
+data class FlowNode(var id: Int, var type: String, var title: String, var x: Float, var y: Float, var config: JSONObject = JSONObject())
+data class FlowEdge(var from: Int, var to: Int, var branch: String = "")
+data class WorkflowState(var id: String = UUID.randomUUID().toString(), var name: String = "My Workflow", val nodes: MutableList<FlowNode> = mutableListOf(), val edges: MutableList<FlowEdge> = mutableListOf(), var active: Boolean = false)
 
 object WorkflowJson {
     fun toJson(state: WorkflowState): JSONObject = JSONObject().apply {
-        put("format", "naten-v2")
-        put("id", state.id)
-        put("name", state.name)
-        put("active", state.active)
-        put("nodes", JSONArray().also { nodes ->
-            state.nodes.forEach { n ->
-                nodes.put(JSONObject().apply {
-                    put("id", n.id)
-                    put("type", n.type)
-                    put("title", n.title)
-                    put("x", n.x)
-                    put("y", n.y)
-                    put("config", n.config)
-                })
-            }
-        })
-        put("edges", JSONArray().also { edges ->
-            state.edges.forEach { e ->
-                edges.put(JSONObject().apply {
-                    put("from", e.from)
-                    put("to", e.to)
-                    put("branch", e.branch)
-                })
-            }
-        })
+        put("format", "naten-v2"); put("id", state.id); put("name", state.name); put("active", state.active)
+        put("nodes", JSONArray().also { a -> state.nodes.forEach { n -> a.put(JSONObject().apply { put("id", n.id); put("type", n.type); put("title", n.title); put("x", n.x); put("y", n.y); put("config", n.config) }) } })
+        put("edges", JSONArray().also { a -> state.edges.forEach { e -> a.put(JSONObject().apply { put("from", e.from); put("to", e.to); put("branch", e.branch) }) } })
     }
-
     fun fromJson(root: JSONObject): WorkflowState {
-        val state = WorkflowState(
-            id = root.optString("id").ifBlank { UUID.randomUUID().toString() },
-            name = root.optString("name", "My Workflow"),
-            active = root.optBoolean("active", false)
-        )
-        val nodes = root.optJSONArray("nodes") ?: JSONArray()
-        for (i in 0 until nodes.length()) {
-            val o = nodes.optJSONObject(i) ?: continue
-            val cfg = o.optJSONObject("config") ?: JSONObject()
-            state.nodes.add(FlowNode(
-                id = o.optInt("id", i + 1),
-                type = o.optString("type", "Manual Trigger"),
-                title = o.optString("title", o.optString("type", "Node")),
-                x = o.optDouble("x", 24.0).toFloat(),
-                y = o.optDouble("y", 24.0).toFloat(),
-                config = JSONObject(cfg.toString())
-            ))
-        }
-        val edges = root.optJSONArray("edges") ?: JSONArray()
-        for (i in 0 until edges.length()) {
-            val o = edges.optJSONObject(i) ?: continue
-            state.edges.add(FlowEdge(o.optInt("from"), o.optInt("to"), o.optString("branch", "")))
-        }
-        return state
+        val s = WorkflowState(root.optString("id").ifBlank { UUID.randomUUID().toString() }, root.optString("name", "My Workflow"), active = root.optBoolean("active", false))
+        val ns = root.optJSONArray("nodes") ?: JSONArray(); for (i in 0 until ns.length()) { val o = ns.optJSONObject(i) ?: continue; s.nodes.add(FlowNode(o.optInt("id", i + 1), o.optString("type", "Manual Trigger"), o.optString("title", o.optString("type", "Node")), o.optDouble("x", 24.0).toFloat(), o.optDouble("y", 24.0).toFloat(), JSONObject((o.optJSONObject("config") ?: JSONObject()).toString()))) }
+        val es = root.optJSONArray("edges") ?: JSONArray(); for (i in 0 until es.length()) { val o = es.optJSONObject(i) ?: continue; s.edges.add(FlowEdge(o.optInt("from"), o.optInt("to"), o.optString("branch", ""))) }
+        return s
     }
 }
 
 object WorkflowStore {
-    private const val PREFS = "naten"
-    private const val CURRENT = "currentWorkflowId"
-    private const val WORKFLOWS_DIR = "workflows"
-    private fun dir(context: Context): File = File(context.filesDir, WORKFLOWS_DIR).apply { mkdirs() }
-    private fun file(context: Context, id: String): File = File(dir(context), id.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".json")
-
-    fun loadCurrent(context: Context): WorkflowState? {
-        val currentId = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(CURRENT, null)
-        if (!currentId.isNullOrBlank()) load(context, currentId)?.let { return it }
-        val legacy = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("workflow", null)
-        if (!legacy.isNullOrBlank()) {
-            val restored = runCatching { WorkflowJson.fromJson(JSONObject(legacy)) }.getOrNull()
-            if (restored != null) { save(context, restored); return restored }
-        }
-        return null
-    }
-
-    fun load(context: Context, id: String): WorkflowState? = runCatching {
-        val raw = file(context, id).takeIf { it.exists() }?.readText() ?: return null
-        WorkflowJson.fromJson(JSONObject(raw))
-    }.getOrNull()
-
-    fun save(context: Context, state: WorkflowState) {
-        state.nodes.forEach { it.ensureDefaultConfig() }
-        file(context, state.id).writeText(WorkflowJson.toJson(state).toString())
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(CURRENT, state.id)
-            .putString("workflow", WorkflowJson.toJson(state).toString()).apply()
-    }
-
-    fun setCurrent(context: Context, id: String) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        .edit().putString(CURRENT, id).apply()
-
-    fun list(context: Context): List<WorkflowState> = dir(context).listFiles { f -> f.extension == "json" }
-        ?.mapNotNull { f -> runCatching { WorkflowJson.fromJson(JSONObject(f.readText())) }.getOrNull() }
-        ?.sortedBy { it.name.lowercase() } ?: emptyList()
-
-    fun newWorkflow(context: Context, name: String = "My Workflow"): WorkflowState = WorkflowState(name = name).also { save(context, it) }
-
-    fun duplicate(context: Context, source: WorkflowState): WorkflowState {
-        val copy = WorkflowState(name = source.name + " Copy", active = false)
-        source.nodes.forEach { n -> copy.nodes.add(FlowNode(n.id, n.type, n.title, n.x, n.y, JSONObject(n.config.toString()))) }
-        source.edges.forEach { e -> copy.edges.add(FlowEdge(e.from, e.to, e.branch)) }
-        save(context, copy)
-        return copy
-    }
-
-    fun delete(context: Context, id: String) {
-        file(context, id).delete()
-        val currentId = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(CURRENT, null)
-        if (currentId == id) context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString(CURRENT, list(context).firstOrNull()?.id).apply()
-    }
-
-    fun history(context: Context): JSONArray = runCatching {
-        JSONArray(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("history", "[]") ?: "[]")
-    }.getOrElse { JSONArray() }
-
-    fun appendHistory(context: Context, entry: JSONObject) {
-        val arr = history(context); arr.put(entry)
-        val limited = JSONArray(); val start = maxOf(0, arr.length() - 100)
-        for (i in start until arr.length()) limited.put(arr.get(i))
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("history", limited.toString()).apply()
-    }
+    private const val PREFS = "naten"; private const val CURRENT = "currentWorkflowId"; private const val WORKFLOWS_DIR = "workflows"
+    private fun dir(c: Context): File = File(c.filesDir, WORKFLOWS_DIR).apply { mkdirs() }
+    private fun file(c: Context, id: String): File = File(dir(c), id.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".json")
+    fun loadCurrent(c: Context): WorkflowState? { val id = c.getSharedPreferences(PREFS, 0).getString(CURRENT, null); if (!id.isNullOrBlank()) load(c, id)?.let { return it }; val legacy = c.getSharedPreferences(PREFS, 0).getString("workflow", null); if (!legacy.isNullOrBlank()) { val r = runCatching { WorkflowJson.fromJson(JSONObject(legacy)) }.getOrNull(); if (r != null) { save(c, r); return r } }; return null }
+    fun load(c: Context, id: String): WorkflowState? = runCatching { val raw = file(c, id).takeIf { it.exists() }?.readText() ?: return null; WorkflowJson.fromJson(JSONObject(raw)) }.getOrNull()
+    fun save(c: Context, s: WorkflowState) { s.nodes.forEach { it.ensureDefaultConfig() }; file(c, s.id).writeText(WorkflowJson.toJson(s).toString()); c.getSharedPreferences(PREFS, 0).edit().putString(CURRENT, s.id).putString("workflow", WorkflowJson.toJson(s).toString()).apply() }
+    fun setCurrent(c: Context, id: String) = c.getSharedPreferences(PREFS, 0).edit().putString(CURRENT, id).apply()
+    fun list(c: Context): List<WorkflowState> = dir(c).listFiles { f -> f.extension == "json" }?.mapNotNull { runCatching { WorkflowJson.fromJson(JSONObject(it.readText())) }.getOrNull() }?.sortedBy { it.name.lowercase() } ?: emptyList()
+    fun newWorkflow(c: Context, name: String = "My Workflow") = WorkflowState(name = name).also { save(c, it) }
+    fun duplicate(c: Context, source: WorkflowState): WorkflowState { val x = WorkflowState(name = source.name + " Copy"); source.nodes.forEach { n -> x.nodes.add(FlowNode(n.id, n.type, n.title, n.x, n.y, JSONObject(n.config.toString()))) }; source.edges.forEach { e -> x.edges.add(FlowEdge(e.from, e.to, e.branch)) }; save(c, x); return x }
+    fun delete(c: Context, id: String) { file(c, id).delete(); val current = c.getSharedPreferences(PREFS, 0).getString(CURRENT, null); if (current == id) c.getSharedPreferences(PREFS, 0).edit().putString(CURRENT, list(c).firstOrNull()?.id).apply() }
+    fun history(c: Context): JSONArray = runCatching { JSONArray(c.getSharedPreferences(PREFS, 0).getString("history", "[]") ?: "[]") }.getOrElse { JSONArray() }
+    fun appendHistory(c: Context, e: JSONObject) { val a = history(c); a.put(e); val out = JSONArray(); for (i in maxOf(0, a.length() - 100) until a.length()) out.put(a.get(i)); c.getSharedPreferences(PREFS, 0).edit().putString("history", out.toString()).apply() }
 }
 
 fun FlowNode.ensureDefaultConfig() {
-    if (!config.has("retries")) config.put("retries", 0)
-    if (!config.has("timeoutSeconds")) config.put("timeoutSeconds", 60)
-    if (!config.has("continueOnFail")) config.put("continueOnFail", false)
+    if (!config.has("retries")) config.put("retries", 0); if (!config.has("timeoutSeconds")) config.put("timeoutSeconds", 60); if (!config.has("continueOnFail")) config.put("continueOnFail", false)
     when (type) {
         "Schedule Trigger" -> { if (!config.has("interval")) config.put("interval", 60); if (!config.has("unit")) config.put("unit", "minutes") }
         "HTTP Request", "Generic API" -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", NodeCatalog.find(type)?.defaultUrl.orEmpty().ifBlank { "https://example.com" }); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", ""); if (!config.has("credentialHeader")) config.put("credentialHeader", "Authorization"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "Bearer ") }
-        "YouTube" -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", "https://www.googleapis.com/youtube/v3/channels?part=snippet,statistics&mine=true"); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", "youtube_api_key"); if (!config.has("credentialHeader")) config.put("credentialHeader", "X-Goog-Api-Key"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "") }
+        "YouTube" -> { if (!config.has("method")) config.put("method", "GET"); if (!config.has("url")) config.put("url", "https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=10&q=technology"); if (!config.has("headers")) config.put("headers", ""); if (!config.has("body")) config.put("body", ""); if (!config.has("credentialName")) config.put("credentialName", "youtube_api_key"); if (!config.has("credentialHeader")) config.put("credentialHeader", "X-Goog-Api-Key"); if (!config.has("credentialPrefix")) config.put("credentialPrefix", "") }
         "GraphQL" -> { if (!config.has("url")) config.put("url", "https://example.com/graphql"); if (!config.has("query")) config.put("query", "query { hello }"); if (!config.has("variables")) config.put("variables", "{}"); if (!config.has("headers")) config.put("headers", "") }
         "Webhook Trigger", "Chat Trigger" -> { if (!config.has("method")) config.put("method", "POST"); if (!config.has("path")) config.put("path", "hook/" + id.toString().take(8)) }
         "Edit Fields" -> if (!config.has("fields")) config.put("fields", "message=Hello")
