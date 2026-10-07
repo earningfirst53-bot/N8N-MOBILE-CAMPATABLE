@@ -1,4 +1,4 @@
-name: Build NATEN
+name: Build Manhua Director
 
 on:
   push:
@@ -13,37 +13,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10'
-
       - name: Build debug APK
         run: gradle --no-daemon clean assembleDebug
-
-      - name: Verify APK exists
+      - name: Verify APK
         run: |
           test -s app/build/outputs/apk/debug/app-debug.apk
           unzip -t app/build/outputs/apk/debug/app-debug.apk >/dev/null
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NATEN-debug-apk-0.6.5
+          name: Manhua-Director-debug-apk-1.0.0
           path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-
-      - name: Package complete source repository
-        run: git archive --format=zip --output=N8N-MOBILE-CAMPATABLE-main.zip HEAD
-
-      - name: Upload complete source repository
-        uses: actions/upload-artifact@v4
-        with:
-          name: N8N-MOBILE-CAMPATABLE-source
-          path: N8N-MOBILE-CAMPATABLE-main.zip
           if-no-files-found: error
